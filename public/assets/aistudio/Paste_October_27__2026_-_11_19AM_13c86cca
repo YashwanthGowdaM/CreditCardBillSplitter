@@ -1,0 +1,1350 @@
+You are editing my React + Vite + TypeScript app "CreditSplit". Do exactly these 2 tasks. Do NOT redesign, refactor, rename or "improve" anything else.
+
+## TASK 1 — Replace src/services/pdfParser.ts
+Overwrite the whole file `src/services/pdfParser.ts` with the code below, CHARACTER FOR CHARACTER. It is already written, tested on real bank statements, and passes `tsc --strict`. Do not change, simplify, reformat, shorten or "fix" any logic, regex, number or lexicon entry. Do not split it into several files. Do not use placeholders like "// rest unchanged". If you believe something is wrong, leave the code as it is and tell me in your reply instead.
+
+```typescript
+/**
+ * pdfParser.ts — layout-agnostic credit-card statement parser.
+ *
+ * Pipeline (no bank-specific code paths):
+ *   1. pdf.js text items  -> positioned lines -> cells (columns)
+ *   2. a "transaction row" is a line with exactly ONE date cell, a money cell to its right,
+ *      and descriptive text between them. Rows are grouped by the x-position of their date
+ *      column (a real table has a consistent date column; prose / EMI schedules / T&C examples don't).
+ *   3. the amount column is chosen by voting (decimals, Dr/Cr indicators, header words)
+ *   4. wrapped description lines are attached by geometry (same column, tight line spacing)
+ *   5. Dr/Cr is decided by: debit/credit columns > explicit indicator (Dr, Cr, D, C, CR, -, brackets)
+ *      > wording (refund, payment received...) > default debit
+ *   6. the statement summary (purchases, fees, ...) is read and reconciled against the parsed rows
+ *
+ * All wording lives in LEXICON below — supporting a new bank means adding words, not code.
+ */
+import * as pdfjsLib from 'pdfjs-dist';
+import { generateId } from './storage';
+import { Transaction } from '../types';
+
+if (typeof window !== 'undefined') {
+  try {
+    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString();
+    }
+  } catch (e) {
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    } catch {
+      console.warn('PDF worker configuration notice:', e);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Public types                                                        */
+/* ------------------------------------------------------------------ */
+
+export type RowKind = 'purchase' | 'fee' | 'interest' | 'emi' | 'payment' | 'refund' | 'bounce';
+
+export interface ExtractedDebitItem {
+  id: string;
+  date: string; // as printed on the statement
+  description: string;
+  amount: number;
+  rawText?: string;
+  selected: boolean;
+  type?: 'DR' | 'CR';
+  refNumber?: string;
+  bankName?: string;
+  pageNumber?: number;
+  statementDate?: string;
+  cardNumber?: string;
+  cardName?: string;
+  // --- additive fields (all optional) ---
+  dateISO?: string;
+  kind?: RowKind;
+  nonSpend?: boolean; // payments, bounced payments... not real spending
+  confidence?: number; // 0..1
+  typeSource?: 'column' | 'indicator' | 'sign' | 'wording' | 'default';
+}
+
+export interface StatementMetadata {
+  bankName: string;
+  statementDate?: string;
+  cardNumber?: string;
+  cardName?: string;
+}
+
+export interface StatementSummary {
+  previousBalance?: number;
+  paymentsCredits?: number;
+  purchases?: number;
+  fees?: number;
+  cashAdvances?: number;
+  totalDue?: number;
+  minimumDue?: number;
+  statementDate?: string;
+  periodStart?: string;
+  periodEnd?: string;
+}
+
+export interface Reconciliation {
+  statementTotal?: number; // what the statement says was debited
+  parsedTotal: number; // sum of ALL parsed debit rows (checked or not)
+  delta?: number;
+  matched: boolean;
+  notes: string[];
+}
+
+export interface ParseDiagnostics {
+  pages: number;
+  textItems: number;
+  tables: { pages: number[]; rows: number; amountColumnX?: number; mode: string }[];
+  skipped: Record<string, number>;
+  notes: string[];
+}
+
+export interface StatementAnalysis {
+  items: ExtractedDebitItem[];
+  metadata: StatementMetadata;
+  detectedBank: string;
+  issuerMismatch: boolean;
+  summary: StatementSummary;
+  reconciliation: Reconciliation;
+  parseConfidence: number;
+  diagnostics: ParseDiagnostics;
+}
+
+export interface ParseOptions {
+  password?: string;
+}
+
+/** Thrown for protected PDFs. `code` is 'PASSWORD_REQUIRED' or 'PASSWORD_INCORRECT'. */
+export class PdfPasswordError extends Error {
+  code: 'PASSWORD_REQUIRED' | 'PASSWORD_INCORRECT';
+  constructor(code: 'PASSWORD_REQUIRED' | 'PASSWORD_INCORRECT') {
+    super(code === 'PASSWORD_REQUIRED' ? 'This PDF is password protected.' : 'Incorrect PDF password.');
+    this.code = code;
+    this.name = 'PdfPasswordError';
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* LEXICON — the only place with wording. Extend freely.               */
+/* ------------------------------------------------------------------ */
+
+const LEXICON = {
+  // lines that can never be a wrapped description line
+  notContinuation: [
+    /^transactions?\s+(for|of|on)\b/i,
+    /^(domestic|international)\s+(transactions?|spends?)/i,
+    /^card\s*(number|no\.?|ending)/i,
+    /^(add-?on|primary|secondary)\s+card/i,
+    /^(card\s*holder|name|account\s*(number|no\.?))\s*:/i,
+    /^total\b/i,
+    /^sub-?total/i,
+    /^(closing|opening)\s+balance/i,
+    /^page\s*\d+/i,
+    /\bpage\s*\d+\s*(of|\/)\s*\d+/i,
+    /^(important|note|notes|terms|disclaimer)\b/i,
+    /^(www\.|https?:)/i,
+    /^[x*]{2,}[\sx*\d-]*\d{4}$/i,
+    /^\d{4}\s*[x*]{4,}/i,
+    /^[#*]\s*/,
+  ],
+  // wording that marks a CREDIT when there is no explicit indicator (last resort)
+  creditWords: [
+    /\brefund/i,
+    /\breversal/i,
+    /\breversed/i,
+    /\bcash\s*back/i,
+    /\bcashback/i,
+    /payment\s*(received|recd|rcvd)/i,
+    /payment\s*[-–]\s*thank/i,
+    /thank\s*you\s*payment/i,
+    /\bcredit\s*adjust/i,
+    /\bbbps\s+payment/i,
+    /\bautopay\b/i,
+    /\bwaiver\b/i,
+  ],
+  // rows that are not spending even when they are debits or credits
+  payment: [
+    /payment\s*(received|recd|rcvd)/i,
+    /payment\s*[-–]\s*thank/i,
+    /thank\s*you\s*payment/i,
+    /direct\s*debit/i,
+    /\bbbps\b/i,
+    /\bautopay\b/i,
+    /\bauto[-\s]?debit\b/i,
+    /\bbill\s*payment/i,
+    /\bnach\b.*\bpayment/i,
+    /\bpayment\b.*\b(neft|imps|upi|ach)\b/i,
+  ],
+  bounce: [/insufficient\s*fund/i, /\breturned\b/i, /\bbounced?\b/i, /\bunpaid\b/i, /\bmandate\s*(fail|reject)/i],
+  fee: [
+    /\bfees?\b/i,
+    /\bcharges?\b/i,
+    /\bgst\b/i,
+    /\b[icsu]gst\b/i,
+    /\bigst/i,
+    /\bcgst/i,
+    /\bsgst/i,
+    /\btax(es)?\b/i,
+    /\blate\s*payment/i,
+    /\bdishonou?r/i,
+    /\bsurcharge/i,
+    /\bannual\s*membership/i,
+    /\bcess\b/i,
+  ],
+  interest: [/\binterest\b/i, /\bfinance\s*charge/i],
+  emi: [/\bemi\b/i, /amorti[sz]ation/i, /\bprincipal\b/i, /\bflexipay\b/i, /\bencash\b/i],
+  // header words used only to *help* choose / name columns
+  header: {
+    amount: /amount|\bamt\b/i,
+    debit: /^(debit|withdrawals?)\b/i,
+    credit: /^(credit|deposits?)\b/i,
+    balance: /balance/i,
+    reward: /reward|points|\bpts\b/i,
+    ref: /reference|ref\.?\s*no|\brrn\b|\barn\b|ser\.?\s*no|sr\.?\s*no/i,
+  },
+  // statement summary labels
+  summary: {
+    previousBalance: /^(previous|opening)\s*balance/i,
+    paymentsCredits: /^payments?\b/i,
+    purchases: /^(total\s+)?purchases?\b/i,
+    fees: /^(fees?,?\s*(taxes|&|and)|finance\s*charges|interest\s*charges)/i,
+    cashAdvances: /^cash\s*advances?\b/i,
+    totalDue: /^\**\s*total\s*(amount\s*)?(due|outstanding)/i,
+    minimumDue: /^\**\s*(minimum|min\.?)\s*(amount\s*)?due/i,
+    statementDate: /^statement\s*date/i,
+  },
+  banks: [
+    ['HDFC Bank', /\bHDFC\b/g],
+    ['ICICI Bank', /\bICICI\b/g],
+    ['SBI Card', /\bSBI\s*CARD\b|\bSTATE\s+BANK\s+OF\s+INDIA\b|\bSBICARD\b/g],
+    ['Axis Bank', /\bAXIS\s+BANK\b|\bUTI\s+BANK\b/g],
+    ['Kotak Mahindra Bank', /\bKOTAK\b/g],
+    ['IDFC FIRST Bank', /\bIDFC\b/g],
+    ['IndusInd Bank', /\bINDUSIND\b/g],
+    ['Standard Chartered', /\bSTANDARD\s+CHARTERED\b/g],
+    ['American Express', /\bAMERICAN\s+EXPRESS\b|\bAMEX\b/g],
+    ['RBL Bank', /\bRBL\b/g],
+    ['Yes Bank', /\bYES\s+BANK\b/g],
+    ['BOBCARD', /\bBOBCARD\b|\bBANK\s+OF\s+BARODA\b/g],
+    ['Citibank', /\bCITI(BANK)?\b/g],
+    ['HSBC', /\bHSBC\b/g],
+    ['AU Small Finance Bank', /\bAU\s+SMALL\s+FINANCE\b/g],
+    ['Federal Bank', /\bFEDERAL\s+BANK\b/g],
+    ['Bank of India', /\bBANK\s+OF\s+INDIA\b/g],
+    ['PNB', /\bPUNJAB\s+NATIONAL\b|\bPNB\b/g],
+  ] as [string, RegExp][],
+};
+
+/* ------------------------------------------------------------------ */
+/* Geometry types                                                      */
+/* ------------------------------------------------------------------ */
+
+interface Cell {
+  text: string;
+  x0: number;
+  x1: number;
+}
+interface Line {
+  page: number;
+  y: number;
+  h: number;
+  cells: Cell[];
+  text: string;
+}
+
+const median = (a: number[]): number => {
+  if (!a.length) return 0;
+  const s = [...a].sort((x, y) => x - y);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/* ------------------------------------------------------------------ */
+/* Dates                                                               */
+/* ------------------------------------------------------------------ */
+
+const MON = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
+const DATE_START = new RegExp(
+  '^(?:' +
+    [
+      '\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2}',
+      '\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}',
+      `\\d{1,2}[\\s\\-\\/.]*${MON}\\.?(?:[\\s\\-\\/.,]*\\d{2,4})?`,
+      `${MON}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s*\\d{2,4}`,
+    ].join('|') +
+    ')(?=$|\\s)',
+  'i'
+);
+const MONTH_IDX = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+interface DateParts {
+  d: number;
+  m: number;
+  y?: number;
+}
+const fullYear = (y: number): number => (y < 100 ? 2000 + y : y);
+
+function parseDateParts(raw: string): DateParts | null {
+  const s = raw.trim().replace(/\s+/g, ' ');
+  let m: RegExpMatchArray | null;
+  let out: DateParts | null = null;
+  if ((m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/))) {
+    out = { y: +m[1], m: +m[2], d: +m[3] };
+  } else if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/))) {
+    let d = +m[1];
+    let mo = +m[2];
+    if (mo > 12 && d <= 12) [d, mo] = [mo, d]; // MM/DD layout
+    out = { d, m: mo, y: m[3] ? fullYear(+m[3]) : undefined };
+  } else if ((m = s.match(/^(\d{1,2})[\s\-\/.]*([A-Za-z]{3,9})\.?(?:[\s\-\/.,]*(\d{2,4}))?$/))) {
+    const mi = MONTH_IDX.indexOf(m[2].slice(0, 3).toLowerCase());
+    if (mi >= 0) out = { d: +m[1], m: mi + 1, y: m[3] ? fullYear(+m[3]) : undefined };
+  } else if ((m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{2,4})?$/))) {
+    const mi = MONTH_IDX.indexOf(m[1].slice(0, 3).toLowerCase());
+    if (mi >= 0) out = { d: +m[2], m: mi + 1, y: m[3] ? fullYear(+m[3]) : undefined };
+  }
+  if (!out || out.d < 1 || out.d > 31 || out.m < 1 || out.m > 12) return null;
+  return out;
+}
+
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+/** Resolve a (possibly year-less) printed date to ISO using the statement's date as reference. */
+function toISO(raw: string, ref?: DateParts | null): string | undefined {
+  const p = parseDateParts(raw);
+  if (!p) return undefined;
+  let y = p.y;
+  if (y === undefined) {
+    if (!ref || ref.y === undefined) return undefined;
+    y = ref.y;
+    if (p.m > ref.m + 1) y = ref.y - 1; // e.g. Dec transaction on a Jan statement
+  }
+  return `${y}-${pad(p.m)}-${pad(p.d)}`;
+}
+
+function cellDate(c: Cell): { raw: string; rest: string } | null {
+  const m = c.text.match(DATE_START);
+  if (m) {
+    const raw = m[0].trim();
+    if (parseDateParts(raw)) return { raw, rest: c.text.slice(m[0].length).trim() };
+  }
+  if (/^\d{1,2}[\/\-]\d{1,2}$/.test(c.text) && parseDateParts(c.text)) return { raw: c.text, rest: '' };
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Money                                                               */
+/* ------------------------------------------------------------------ */
+
+const MONEY_RE =
+  /^(?:[-+]\s*)?(?:(?:₹|`|Rs\.?|INR|USD|\$)\s*)?(?:[-+]\s*)?(\()?(\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(\d{1,2}))?\)?\s*(?:(CR|DR|C|D)\.?)?$/i;
+const IND_ONLY_RE = /^(CR|DR|C|D)\.?$/i;
+
+interface Money {
+  value: number;
+  decimals: boolean;
+  ind?: 'CR' | 'DR';
+  neg: boolean;
+  hasCurrency: boolean;
+}
+
+function parseMoneyCell(text: string): Money | null {
+  const t = text.trim();
+  const m = t.match(MONEY_RE);
+  if (!m) return null;
+  const intPart = m[2].replace(/,/g, '');
+  const decimals = m[3] !== undefined;
+  if (!decimals && intPart.length >= 9) return null; // reference / serial number
+  const value = parseFloat(intPart + (decimals ? '.' + m[3] : ''));
+  if (!isFinite(value)) return null;
+  const ind = m[4] ? (/^c/i.test(m[4]) ? 'CR' : 'DR') : undefined;
+  const neg = /^[-]/.test(t) || !!m[1] || /^(?:[₹`]|Rs\.?|INR)?\s*-/.test(t);
+  return { value: Math.round(value * 100) / 100, decimals, ind, neg, hasCurrency: /^(?:₹|`|Rs|INR|USD|\$)/i.test(t) };
+}
+
+/** Kept for backwards compatibility with the previous module API. */
+export function parseAmount(val: string): number | null {
+  const m = parseMoneyCell(val);
+  return m && m.value > 0 ? m.value : null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Step 1 — text extraction (pdf.js -> lines -> cells)                 */
+/* ------------------------------------------------------------------ */
+
+interface RawItem {
+  str: string;
+  x0: number;
+  x1: number;
+  y: number;
+  h: number;
+}
+
+function buildLines(items: RawItem[], page: number): Line[] {
+  if (!items.length) return [];
+  const medH = median(items.map((i) => i.h).filter((h) => h > 0)) || 8;
+  const tol = Math.max(2, 0.5 * medH);
+  const sorted = [...items].sort((a, b) => b.y - a.y || a.x0 - b.x0);
+
+  const groups: RawItem[][] = [];
+  let cur: RawItem[] = [];
+  let curY = 0;
+  for (const it of sorted) {
+    if (!cur.length || Math.abs(it.y - curY) <= tol) {
+      if (!cur.length) curY = it.y;
+      cur.push(it);
+    } else {
+      groups.push(cur);
+      cur = [it];
+      curY = it.y;
+    }
+  }
+  if (cur.length) groups.push(cur);
+
+  return groups.map((g) => {
+    g.sort((a, b) => a.x0 - b.x0);
+    const cells: Cell[] = [];
+    for (const it of g) {
+      const last = cells[cells.length - 1];
+      const fs = it.h > 0 ? it.h : medH;
+      const gap = last ? it.x0 - last.x1 : 0;
+      if (last && gap < Math.max(4, 0.7 * fs)) {
+        last.text += (gap > 0.12 * fs ? ' ' : '') + it.str.trim();
+        last.x1 = Math.max(last.x1, it.x1);
+      } else {
+        cells.push({ text: it.str.trim(), x0: it.x0, x1: it.x1 });
+      }
+    }
+    const cleaned = cells.filter((c) => c.text.length > 0);
+    return {
+      page,
+      y: g[0].y,
+      h: Math.max(...g.map((i) => i.h), 1),
+      cells: cleaned,
+      text: cleaned.map((c) => c.text).join(' '),
+    };
+  });
+}
+
+/** Build lines from plain text (paste mode) so it uses the very same engine. */
+function linesFromText(texts: string[]): Line[] {
+  const out: Line[] = [];
+  texts.forEach((raw, idx) => {
+    const t = raw.replace(/\t/g, '  ').replace(/\s+$/, '');
+    if (!t.trim()) return;
+    const parts: { s: string; at: number }[] = [];
+    if (/\s{2,}/.test(t.trim())) {
+      const re = /\S(?:.*?\S)?(?=\s{2,}|$)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(t))) parts.push({ s: m[0], at: m.index });
+    } else {
+      // single-spaced paste: peel off date, trailing indicator/amounts, keep the middle as description
+      let rest = t.trim();
+      let at = t.indexOf(rest);
+      const dm = rest.match(DATE_START);
+      if (dm) {
+        parts.push({ s: dm[0].trim(), at });
+        rest = rest.slice(dm[0].length).trim();
+        at = t.indexOf(rest, at);
+      }
+      const tail: { s: string; at: number }[] = [];
+      for (;;) {
+        const m = rest.match(/(?:^|\s)(\S+)$/);
+        if (!m) break;
+        const tok = m[1];
+        if (IND_ONLY_RE.test(tok) || parseMoneyCell(tok)) {
+          tail.unshift({ s: tok, at: at + rest.length - tok.length });
+          rest = rest.slice(0, rest.length - tok.length).trim();
+        } else break;
+      }
+      if (rest) parts.push({ s: rest, at });
+      parts.push(...tail);
+    }
+    const cells: Cell[] = parts.map((p) => ({ text: p.s, x0: p.at * 5, x1: (p.at + p.s.length) * 5 }));
+    out.push({ page: 1, y: 10000 - idx * 10, h: 8, cells, text: cells.map((c) => c.text).join(' ') });
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Step 2 — candidate rows                                             */
+/* ------------------------------------------------------------------ */
+
+interface RCell extends Cell {
+  money?: Money;
+  ind?: 'CR' | 'DR'; // indicator carried by an adjacent indicator-only cell
+  textual: boolean; // contains letters and is not a bare number
+}
+
+interface Candidate {
+  line: Line;
+  lineIdx: number; // index within its page
+  page: number;
+  dateRaw: string;
+  dateRest: string;
+  dateX0: number;
+  dateCellIdx: number;
+  cells: RCell[]; // cells after the date cell
+}
+
+function toRCells(cells: Cell[]): RCell[] {
+  const out: RCell[] = [];
+  for (const c of cells) {
+    if (IND_ONLY_RE.test(c.text) && out.length && out[out.length - 1].money) {
+      out[out.length - 1].ind = /^c/i.test(c.text) ? 'CR' : 'DR';
+      out[out.length - 1].x1 = Math.max(out[out.length - 1].x1, c.x1);
+      continue;
+    }
+    const money = parseMoneyCell(c.text) || undefined;
+    const bareNumber = /^[\d,.\s]+$/.test(c.text);
+    out.push({ ...c, money, textual: /[A-Za-z]{2,}/.test(c.text.replace(/^(?:INR|Rs\.?)/i, '')) && !money && !bareNumber });
+  }
+  return out;
+}
+
+function toCandidate(line: Line, lineIdx: number): Candidate | null {
+  let dateIdx = -1;
+  let dateCount = 0;
+  let dateInfo: { raw: string; rest: string } | null = null;
+  line.cells.forEach((c, i) => {
+    const d = cellDate(c);
+    if (d) {
+      dateCount++;
+      if (dateIdx < 0) {
+        dateIdx = i;
+        dateInfo = d;
+      }
+    }
+  });
+  if (dateIdx < 0 || dateCount !== 1 || !dateInfo) return null;
+  const info = dateInfo as { raw: string; rest: string };
+  const after = toRCells(line.cells.slice(dateIdx + 1));
+  let lastMoney = -1;
+  after.forEach((c, i) => {
+    if (c.money) lastMoney = i;
+  });
+  if (lastMoney < 0) return null;
+  const hasText = !!info.rest || after.slice(0, lastMoney).some((c) => c.textual);
+  if (!hasText) return null;
+  return {
+    line,
+    lineIdx,
+    page: line.page,
+    dateRaw: info.raw,
+    dateRest: info.rest,
+    dateX0: line.cells[dateIdx].x0,
+    dateCellIdx: dateIdx,
+    cells: after,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Headers (help only; the parser works without them)                  */
+/* ------------------------------------------------------------------ */
+
+type HeaderRole = 'amount' | 'debit' | 'credit' | 'balance' | 'reward' | 'ref';
+interface HeaderCell {
+  role: HeaderRole;
+  x0: number;
+  x1: number;
+}
+
+function findHeaders(lines: Line[], firstRowIdx: number): HeaderCell[] {
+  const out: HeaderCell[] = [];
+  const base = lines[firstRowIdx];
+  for (let i = firstRowIdx - 1; i >= 0 && firstRowIdx - i <= 8; i--) {
+    const ln = lines[i];
+    if (base.y - ln.y > 10 * base.h) break;
+    for (const c of ln.cells) {
+      const t = c.text;
+      if (t.length > 40) continue;
+      for (const role of Object.keys(LEXICON.header) as HeaderRole[]) {
+        if (LEXICON.header[role].test(t)) {
+          out.push({ role, x0: c.x0, x1: c.x1 });
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+const overlaps = (a0: number, a1: number, b0: number, b1: number, slack = 8): boolean =>
+  a1 >= b0 - slack && a0 <= b1 + slack;
+
+/* ------------------------------------------------------------------ */
+/* Step 3/4/5 — table building                                         */
+/* ------------------------------------------------------------------ */
+
+interface MoneyRef {
+  row: number;
+  cell: number;
+  x0: number;
+  x1: number;
+}
+interface MoneyCluster {
+  members: MoneyRef[];
+  score: number;
+}
+
+function aligned(a: MoneyRef, b: MoneyRef): boolean {
+  return (
+    Math.abs(a.x1 - b.x1) <= 7 ||
+    Math.abs(a.x0 - b.x0) <= 7 ||
+    Math.abs((a.x0 + a.x1) / 2 - (b.x0 + b.x1) / 2) <= 7
+  );
+}
+
+function clusterMoney(rows: Candidate[]): MoneyCluster[] {
+  const clusters: MoneyCluster[] = [];
+  rows.forEach((r, ri) => {
+    r.cells.forEach((c, ci) => {
+      if (!c.money) return;
+      const ref: MoneyRef = { row: ri, cell: ci, x0: c.x0, x1: c.x1 };
+      const cl = clusters.find((k) => k.members.some((m) => m.row !== ri && aligned(m, ref)));
+      if (cl) cl.members.push(ref);
+      else clusters.push({ members: [ref], score: 0 });
+    });
+  });
+  return clusters;
+}
+
+function cleanText(s: string): string {
+  return s
+    .replace(/[`₹]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .trim();
+}
+
+/** Friendly description for payment-rail strings (UPI/IMPS/NEFT...), full text stays in rawText. */
+function friendlyDescription(text: string): string {
+  const t = cleanText(text);
+  const rail = t.match(/^(UPI|IMPS|NEFT|RTGS|NACH|ACH|POS|ECOM)\b/i);
+  if (!rail) return t;
+  const R = rail[1].toUpperCase();
+  const re = /[-\/]\s*(?:\d\s*){6,}\s*[-\/]\s*/g;
+  let last: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t))) last = m;
+  if (last) {
+    const tail = t.slice(last.index + last[0].length).trim();
+    if (/[A-Za-z]{2,}/.test(tail)) return `${R} – ${tail}`;
+  }
+  const noDigitsRail = t.replace(/^(UPI|IMPS|NEFT|RTGS|NACH|ACH|POS|ECOM)[-\/\s]+/i, '');
+  if (!/^(?:\d\s*){6,}/.test(noDigitsRail) && /[A-Za-z]{2,}/.test(noDigitsRail)) {
+    const words = noDigitsRail
+      .split(/\s+/)
+      .filter((w) => !(w.length >= 12 && /\d/.test(w) && /[A-Za-z]/.test(w)) && !/^\d{9,}$/.test(w));
+    return `${R} – ${words.join(' ')}`.trim();
+  }
+  return t;
+}
+
+function classify(
+  description: string,
+  type: 'DR' | 'CR'
+): { kind: RowKind; nonSpend: boolean } {
+  const d = description;
+  if (type === 'CR') {
+    if (LEXICON.payment.some((r) => r.test(d))) return { kind: 'payment', nonSpend: true };
+    return { kind: 'refund', nonSpend: false };
+  }
+  if (LEXICON.fee.some((r) => r.test(d)) && !/direct\s*debit/i.test(d)) {
+    if (LEXICON.interest.some((r) => r.test(d)) && !/\bgst\b|[icsu]gst/i.test(d)) return { kind: 'interest', nonSpend: false };
+    if (LEXICON.emi.some((r) => r.test(d))) return { kind: 'emi', nonSpend: false };
+    return { kind: 'fee', nonSpend: false };
+  }
+  if (LEXICON.bounce.some((r) => r.test(d))) return { kind: 'bounce', nonSpend: true };
+  if (LEXICON.payment.some((r) => r.test(d))) return { kind: 'payment', nonSpend: true };
+  if (LEXICON.interest.some((r) => r.test(d))) return { kind: 'interest', nonSpend: false };
+  if (LEXICON.emi.some((r) => r.test(d))) return { kind: 'emi', nonSpend: false };
+  return { kind: 'purchase', nonSpend: false };
+}
+
+interface TableResult {
+  rows: ExtractedRow[];
+  mode: string;
+  amountX?: number;
+  skipped: Record<string, number>;
+}
+interface ExtractedRow {
+  page: number;
+  y: number;
+  dateRaw: string;
+  description: string;
+  rawText: string;
+  amount: number;
+  type: 'DR' | 'CR';
+  typeSource: NonNullable<ExtractedDebitItem['typeSource']>;
+  confidence: number;
+}
+
+function buildTable(rows: Candidate[], pages: Line[][], indicatorDoc: boolean): TableResult {
+  const skipped: Record<string, number> = {};
+  const skip = (k: string) => (skipped[k] = (skipped[k] || 0) + 1);
+
+  // ---- headers (optional help)
+  const headers: HeaderCell[] = [];
+  const seenPages = new Set<number>();
+  for (const r of rows) {
+    if (seenPages.has(r.page)) continue;
+    seenPages.add(r.page);
+    headers.push(...findHeaders(pages[r.page - 1], r.lineIdx));
+  }
+  const hasDebit = headers.some((h) => h.role === 'debit');
+  const hasCredit = headers.some((h) => h.role === 'credit');
+  const splitMode = hasDebit && hasCredit;
+
+  // ---- choose the amount column by voting
+  const clusters = clusterMoney(rows);
+  for (const cl of clusters) {
+    let s = 0;
+    for (const m of cl.members) {
+      const mc = rows[m.row].cells[m.cell];
+      if (mc.money?.decimals) s += 2;
+      if (mc.money?.ind || mc.ind) s += 3;
+      s += 1;
+    }
+    const x0 = Math.min(...cl.members.map((m) => m.x0));
+    const x1 = Math.max(...cl.members.map((m) => m.x1));
+    for (const h of headers) {
+      if (!overlaps(x0, x1, h.x0, h.x1, 10)) continue;
+      if (h.role === 'amount' || h.role === 'debit' || h.role === 'credit') s += 4;
+      if (h.role === 'reward' || h.role === 'ref' || h.role === 'balance') s -= 5;
+    }
+    cl.score = s;
+  }
+  const amountCluster = splitMode ? undefined : [...clusters].sort((a, b) => b.score - a.score)[0];
+  const inAmountCluster = new Set<string>();
+  amountCluster?.members.forEach((m) => inAmountCluster.add(`${m.row}:${m.cell}`));
+  const amountLeft = amountCluster ? Math.min(...amountCluster.members.map((m) => m.x0)) : Infinity;
+
+  const roleOf = (c: RCell): HeaderRole | undefined => {
+    let best: { role: HeaderRole; d: number } | undefined;
+    for (const h of headers) {
+      if (h.role === 'amount' || h.role === 'ref') continue;
+      const d = Math.min(Math.abs(c.x1 - h.x1), Math.abs(c.x0 - h.x0), Math.abs((c.x0 + c.x1) / 2 - (h.x0 + h.x1) / 2));
+      if (d <= 28 && (!best || d < best.d)) best = { role: h.role, d };
+    }
+    return best?.role;
+  };
+
+  // ---- first pass: pick amount cell per row and description cells
+  interface Pre {
+    cand: Candidate;
+    amountIdx: number;
+    amount: number;
+    type: 'DR' | 'CR';
+    typeSource: ExtractedRow['typeSource'];
+    descCells: RCell[];
+    conf: number;
+  }
+  const pre: Pre[] = [];
+  rows.forEach((cand, ri) => {
+    let amountIdx = -1;
+    let forcedType: 'DR' | 'CR' | undefined;
+    let conf = 0.9;
+
+    if (splitMode) {
+      cand.cells.forEach((c, ci) => {
+        if (!c.money || amountIdx >= 0) return;
+        const r = roleOf(c);
+        if (r === 'debit') {
+          amountIdx = ci;
+          forcedType = 'DR';
+        } else if (r === 'credit') {
+          amountIdx = ci;
+          forcedType = 'CR';
+        }
+      });
+    } else {
+      cand.cells.forEach((c, ci) => {
+        if (c.money && inAmountCluster.has(`${ri}:${ci}`) && amountIdx < 0) amountIdx = ci;
+      });
+    }
+    if (amountIdx < 0) {
+      // fallback: rightmost money cell that carries decimals or an indicator
+      for (let ci = cand.cells.length - 1; ci >= 0; ci--) {
+        const c = cand.cells[ci];
+        if (c.money && (c.money.decimals || c.money.ind || c.ind)) {
+          amountIdx = ci;
+          conf -= 0.25;
+          break;
+        }
+      }
+    }
+    if (amountIdx < 0) {
+      skip('NO_AMOUNT');
+      return;
+    }
+    const ac = cand.cells[amountIdx];
+    const money = ac.money as Money;
+    if (money.value <= 0) {
+      skip('ZERO_AMOUNT');
+      return;
+    }
+
+    // ---- debit / credit
+    let type: 'DR' | 'CR' = 'DR';
+    let typeSource: ExtractedRow['typeSource'] = 'default';
+    const ind = money.ind || ac.ind;
+    if (forcedType) {
+      type = forcedType;
+      typeSource = 'column';
+    } else if (ind) {
+      type = ind;
+      typeSource = 'indicator';
+    } else if (money.neg) {
+      type = 'CR';
+      typeSource = 'sign';
+    } else {
+      const probe = [cand.dateRest, ...cand.cells.slice(0, amountIdx).filter((c) => c.textual).map((c) => c.text)].join(' ');
+      if (LEXICON.creditWords.some((r) => r.test(probe))) {
+        type = 'CR';
+        typeSource = 'wording';
+        conf -= 0.1;
+      } else if (indicatorDoc) {
+        conf -= 0.2; // this statement marks rows with indicators but this row has none
+      }
+    }
+
+    const descCells = cand.cells.slice(0, amountIdx).filter((c) => c.textual);
+    pre.push({ cand, amountIdx, amount: money.value, type, typeSource, descCells, conf });
+  });
+
+  // ---- description column geometry
+  const descLeft = pre.length ? Math.min(...pre.flatMap((p) => p.descCells.map((c) => c.x0)).concat([Infinity])) : 0;
+  const descRight = pre.length ? Math.max(...pre.flatMap((p) => p.descCells.map((c) => c.x1)).concat([-Infinity])) : 0;
+  const amtLeftBound = pre.length ? Math.min(...pre.map((p) => p.cand.cells[p.amountIdx].x0)) : amountLeft;
+
+  // ---- wrapped lines
+  const out: ExtractedRow[] = [];
+  for (const p of pre) {
+    const lines = pages[p.cand.page - 1];
+    const pieces: { text: string; reachedEdge: boolean }[] = [];
+    const first = [p.cand.dateRest, ...p.descCells.map((c) => c.text)].filter(Boolean).join(' ');
+    if (first) {
+      const lastCell = p.descCells[p.descCells.length - 1];
+      pieces.push({ text: first, reachedEdge: !!lastCell && lastCell.x1 >= descRight - 4 });
+    }
+    let prevY = p.cand.line.y;
+    let used = 0;
+    const accept = (ln: Line): { text: string; reachedEdge: boolean } | null => {
+      const cs = ln.cells.filter((c) => c.x0 >= descLeft - 12 && c.x1 <= amtLeftBound + 2);
+      if (!cs.length) return null; // decoration from another column
+      if (cs.some((c) => parseMoneyCell(c.text) && !/[A-Za-z]/.test(c.text) && c.x0 >= amtLeftBound - 40)) return null;
+      return { text: cs.map((c) => c.text).join(' '), reachedEdge: cs[cs.length - 1].x1 >= descRight - 4 };
+    };
+    let j = p.cand.lineIdx + 1;
+    let endedInPage = true;
+    for (; j < lines.length && used < 6; j++) {
+      const ln = lines[j];
+      if (toCandidate(ln, j)) break;
+      if (prevY - ln.y > 1.3 * Math.max(ln.h, p.cand.line.h)) break;
+      if (LEXICON.notContinuation.some((r) => r.test(ln.text.trim()))) break;
+      if (ln.cells.some((c) => cellDate(c))) break;
+      const a1 = accept(ln);
+      if (!a1) continue; // keep scanning, prevY unchanged so spacing still applies
+      pieces.push(a1);
+      prevY = ln.y;
+      used++;
+    }
+    if (j < lines.length) endedInPage = false;
+    // a wrapped description may continue at the top of the next page
+    if (endedInPage && used < 6 && p.cand.page < pages.length) {
+      const next = pages[p.cand.page];
+      let k = 0;
+      while (k < next.length && k < 4 && !toCandidate(next[k], k)) k++;
+      if (k > 0 && k < next.length && toCandidate(next[k], k)) {
+        const gapOk = next[k - 1].y - next[k].y <= 1.9 * Math.max(next[k].h, 1);
+        const ok = next.slice(0, k).every((ln) => {
+          if (LEXICON.notContinuation.some((r) => r.test(ln.text.trim()))) return false;
+          if (ln.cells.some((c) => cellDate(c))) return false;
+          if (ln.cells.some((c) => c.text.length < 30 && Object.values(LEXICON.header).some((r) => r.test(c.text)))) return false;
+          return true;
+        });
+        if (gapOk && ok) {
+          for (const ln of next.slice(0, k)) {
+            const a2 = accept(ln);
+            if (a2) pieces.push(a2);
+          }
+        }
+      }
+    }
+    let joined = '';
+    pieces.forEach((pc, i) => {
+      if (i === 0) joined = pc.text;
+      else {
+        const prev = pieces[i - 1];
+        const lastTok = prev.text.split(' ').pop() || '';
+        const glue = prev.reachedEdge && lastTok.length >= 18 && !/[\s]$/.test(prev.text) ? '' : ' ';
+        joined += glue + pc.text;
+      }
+    });
+    const description = friendlyDescription(joined) || 'Credit card transaction';
+    out.push({
+      page: p.cand.page,
+      y: p.cand.line.y,
+      dateRaw: p.cand.dateRaw,
+      description,
+      rawText: cleanText(joined),
+      amount: p.amount,
+      type: p.type,
+      typeSource: p.typeSource,
+      confidence: Math.max(0.2, Math.min(1, p.conf)),
+    });
+  }
+
+  return {
+    rows: out,
+    mode: splitMode ? 'debit/credit columns' : 'single amount column',
+    amountX: amountCluster ? Math.round(amountLeft) : undefined,
+    skipped,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Statement summary                                                   */
+/* ------------------------------------------------------------------ */
+
+function isAmountCell(c: Cell): Money | null {
+  const m = parseMoneyCell(c.text);
+  if (!m) return null;
+  return m.decimals || m.hasCurrency ? m : null;
+}
+
+function findValueForLabel(lines: Line[], li: number, ci: number): Money | null {
+  const line = lines[li];
+  const label = line.cells[ci];
+  // same line, to the right, before another label
+  for (let k = ci + 1; k < line.cells.length; k++) {
+    const m = isAmountCell(line.cells[k]);
+    if (m) return m;
+    if (/[A-Za-z]{3,}/.test(line.cells[k].text)) break;
+  }
+  // below: value whose nearest label (on this line) is ours
+  const labels = line.cells.filter((c) => /[A-Za-z]{3,}/.test(c.text));
+  const lc = (label.x0 + label.x1) / 2;
+  for (let k = 1; k <= 4 && li + k < lines.length; k++) {
+    const below = lines[li + k];
+    const cands = below.cells
+      .map((c) => ({ c, m: isAmountCell(c) }))
+      .filter((o): o is { c: Cell; m: Money } => !!o.m)
+      .map((o) => ({ ...o, center: (o.c.x0 + o.c.x1) / 2 }));
+    if (!cands.length) continue;
+    let best: { m: Money; d: number } | undefined;
+    const labelW = label.x1 - label.x0;
+    for (const o of cands) {
+      const nearest = labels.reduce((a, b) =>
+        Math.abs((b.x0 + b.x1) / 2 - o.center) < Math.abs((a.x0 + a.x1) / 2 - o.center) ? b : a
+      );
+      if (nearest === label) {
+        const d = Math.abs(o.center - lc);
+        if (d <= Math.max(60, labelW) && (!best || d < best.d)) best = { m: o.m, d };
+      }
+    }
+    if (best) return best.m;
+  }
+  return null;
+}
+
+function findDateForLabel(lines: Line[], li: number, ci: number): string | undefined {
+  const line = lines[li];
+  for (let k = ci; k < line.cells.length; k++) {
+    const d = cellDate(line.cells[k]);
+    if (d) return d.raw;
+    const inline = line.cells[k].text.match(/(?:statement\s*date)\s*[:\-]?\s*(.+)$/i);
+    if (inline) {
+      const dd = inline[1].match(DATE_START);
+      if (dd) return dd[0].trim();
+    }
+  }
+  const label = line.cells[ci];
+  for (let k = 1; k <= 3 && li + k < lines.length; k++) {
+    for (const c of lines[li + k].cells) {
+      const d = cellDate(c);
+      if (d && overlaps(c.x0, c.x1, label.x0, label.x1 + 60, 20)) return d.raw;
+    }
+  }
+  return undefined;
+}
+
+function extractSummary(pages: Line[][]): StatementSummary {
+  const s: StatementSummary = {};
+  const lines = pages.slice(0, 3).flat();
+  const keys = ['previousBalance', 'paymentsCredits', 'purchases', 'fees', 'cashAdvances', 'totalDue', 'minimumDue'] as const;
+  lines.forEach((ln, li) => {
+    ln.cells.forEach((c, ci) => {
+      const t = c.text.replace(/^[*#\s]+/, '');
+      for (const k of keys) {
+        if (s[k] !== undefined) continue;
+        if (LEXICON.summary[k].test(t)) {
+          // "Label   Rs. 1,234.00" printed as ONE text run
+          const inline = t.match(/(?:₹|`|Rs\.?|INR)?\s*(\d[\d,]*\.\d{2})\s*(?:CR|DR)?$/i);
+          const m = inline ? parseMoneyCell(inline[0]) : findValueForLabel(lines, li, ci);
+          if (m) s[k] = m.value;
+        }
+      }
+      if (!s.statementDate && LEXICON.summary.statementDate.test(t)) s.statementDate = findDateForLabel(lines, li, ci);
+    });
+  });
+  // statement period: "<date> to <date>" near the words statement/billing period
+  const periodRe = new RegExp(
+    `(?:statement|billing)\\s*period\\s*[:\\-]?\\s*(?:for\\s*statement\\s*period\\s*:)?\\s*(\\d{1,2}[\\s\\-\\/.]*${MON}[\\s\\-\\/.,]*\\d{2,4}|${MON}\\s+\\d{1,2},?\\s*\\d{2,4}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4})\\s*(?:to|-|–)\\s*(\\d{1,2}[\\s\\-\\/.]*${MON}[\\s\\-\\/.,]*\\d{2,4}|${MON}\\s+\\d{1,2},?\\s*\\d{2,4}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4})`,
+    'i'
+  );
+  for (const ln of lines) {
+    const m = ln.text.match(periodRe);
+    if (m) {
+      s.periodStart = m[1].trim();
+      s.periodEnd = m[2].trim();
+      break;
+    }
+  }
+  if (!s.periodEnd) {
+    // SBI-style: "for Statement Period: 18 Sep 26 to 17 Oct 26" is caught above; otherwise any "X to Y" date pair
+    for (const ln of lines) {
+      const m = ln.text.match(/period[^\d]{0,20}(.{6,20}?)\s+to\s+(.{6,20}?)(?:\s|$)/i);
+      if (m && parseDateParts(m[1]) && parseDateParts(m[2])) {
+        s.periodStart = m[1].trim();
+        s.periodEnd = m[2].trim();
+        break;
+      }
+    }
+  }
+  return s;
+}
+
+function reconcile(parsedTotal: number, s: StatementSummary): Reconciliation {
+  const notes: string[] = [];
+  const parts = [
+    { k: 'purchases', v: s.purchases },
+    { k: 'fees', v: s.fees },
+    { k: 'cash advances', v: s.cashAdvances },
+  ].filter((p) => p.v !== undefined && p.v > 0) as { k: string; v: number }[];
+  if (!parts.length) {
+    notes.push('The statement summary was not recognised, so totals could not be verified.');
+    return { parsedTotal, matched: false, notes };
+  }
+  // try every combination of the available summary figures
+  let best: { total: number; label: string } | undefined;
+  for (let mask = 1; mask < 1 << parts.length; mask++) {
+    const sel = parts.filter((_, i) => mask & (1 << i));
+    const total = Math.round(sel.reduce((a, b) => a + b.v, 0) * 100) / 100;
+    const label = sel.map((x) => x.k).join(' + ');
+    if (Math.abs(total - parsedTotal) < 0.011) {
+      return { statementTotal: total, parsedTotal, delta: 0, matched: true, notes: [`Matches statement ${label}.`] };
+    }
+    if (!best || Math.abs(total - parsedTotal) < Math.abs(best.total - parsedTotal)) best = { total, label };
+  }
+  const b = best as { total: number; label: string };
+  const delta = Math.round((parsedTotal - b.total) * 100) / 100;
+  notes.push(`Parsed debits differ from the statement (${b.label}) by ₹${Math.abs(delta).toFixed(2)}.`);
+  return { statementTotal: b.total, parsedTotal, delta, matched: false, notes };
+}
+
+/* ------------------------------------------------------------------ */
+/* Bank / metadata                                                     */
+/* ------------------------------------------------------------------ */
+
+function detectBank(text: string): string | undefined {
+  const up = text.toUpperCase();
+  let best: { name: string; n: number } | undefined;
+  for (const [name, re] of LEXICON.banks) {
+    const n = (up.match(re) || []).length;
+    if (n > 0 && (!best || n > best.n)) best = { name, n };
+  }
+  return best?.name;
+}
+
+export function detectBankAndMetadata(cardIssuer?: string, sampleText: string = ''): StatementMetadata {
+  const bankName = detectBank(sampleText) || detectBank(cardIssuer || '') || 'Credit Card';
+  const cardNumMatch = sampleText.match(
+    /\b(?:\d{4}[-\s*]{1,4}\d{4}[-\s*]{1,4}\d{4}[-\s*]{1,4}\d{4}|(?:[Xx*]{4}[-\s]){1,3}\d{2,4}|[Xx*]{4,12}\d{2,4}|\d{4}[Xx*]{6,10}\d{4})\b/
+  );
+  return { bankName, cardNumber: cardNumMatch ? cardNumMatch[0].trim() : undefined };
+}
+
+/* ------------------------------------------------------------------ */
+/* Engine                                                              */
+/* ------------------------------------------------------------------ */
+
+function analyzeLines(
+  pages: Line[][],
+  cardIssuer: string | undefined,
+  cardName: string | undefined,
+  textItems: number
+): StatementAnalysis {
+  const skipped: Record<string, number> = {};
+  const bump = (k: string, n = 1) => (skipped[k] = (skipped[k] || 0) + n);
+
+  // page text for bank / metadata (first two pages)
+  const sample = pages.slice(0, 2).flat().map((l) => l.text).join(' ');
+  const detectedBank = detectBank(sample) || detectBank(cardIssuer || '') || 'Credit Card';
+  const metadata = detectBankAndMetadata(cardIssuer, sample);
+  metadata.bankName = detectedBank;
+  const selectedBank = detectBank(cardIssuer || '');
+  const pdfBank = detectBank(sample);
+  const issuerMismatch = !!(selectedBank && pdfBank && selectedBank !== pdfBank);
+
+  const summary = extractSummary(pages);
+  metadata.statementDate = summary.statementDate;
+  const refDate = parseDateParts(summary.periodEnd || summary.statementDate || '') || null;
+
+  // prose detection per page (never trust tiny tables on text-heavy pages)
+  const prosePage = pages.map((ls) => {
+    const long = ls.filter((l) => l.cells.length === 1 && l.text.length > 70).length;
+    return ls.length > 8 && long / ls.length > 0.3;
+  });
+
+  // candidates
+  const cands: Candidate[] = [];
+  pages.forEach((ls, pi) => {
+    ls.forEach((ln, li) => {
+      const c = toCandidate(ln, li);
+      if (c) cands.push(c);
+      else if (cellDate(ln.cells[0] || { text: '', x0: 0, x1: 0 })) bump('DATE_WITHOUT_AMOUNT');
+    });
+  });
+
+  // group candidates by date-column x (a real table has one consistent date column)
+  const groups: Candidate[][] = [];
+  for (const c of cands) {
+    const g = groups.find((gr) => Math.abs(gr[0].dateX0 - c.dateX0) <= 10);
+    if (g) g.push(c);
+    else groups.push([c]);
+  }
+  const accepted: Candidate[][] = [];
+  for (const g of groups) {
+    const pagesOf = new Set(g.map((c) => c.page));
+    const allProse = [...pagesOf].every((p) => prosePage[p - 1]);
+    if (g.length >= 2 && !(allProse && g.length < 3)) accepted.push(g);
+    else if (g.length === 1 && !allProse) {
+      const p = g[0].page;
+      const biggerSamePage = groups.some((o) => o !== g && o.some((c) => c.page === p) && o.length >= 2);
+      if (!biggerSamePage) accepted.push(g);
+      else bump('ISOLATED_DATE_ROW');
+    } else bump(allProse ? 'PROSE_PAGE' : 'ISOLATED_DATE_ROW', g.length);
+  }
+
+  // does this statement mark rows with Dr/Cr style indicators?
+  const indicatorCount = cands.filter((c) => c.cells.some((x) => x.money && (x.money.ind || x.ind))).length;
+  const indicatorDoc = cands.length > 0 && indicatorCount / cands.length > 0.5;
+
+  const tables: ParseDiagnostics['tables'] = [];
+  const items: ExtractedDebitItem[] = [];
+  const ys = new Map<string, number>();
+  for (const g of accepted) {
+    g.sort((a, b) => a.page - b.page || b.line.y - a.line.y);
+    const res = buildTable(g, pages, indicatorDoc);
+    for (const [k, v] of Object.entries(res.skipped)) bump(k, v);
+    tables.push({ pages: [...new Set(g.map((c) => c.page))], rows: res.rows.length, amountColumnX: res.amountX, mode: res.mode });
+    for (const r of res.rows) {
+      const cls = classify(r.description + ' ' + r.rawText, r.type);
+      const selected = r.type === 'DR' && !cls.nonSpend;
+      const id = generateId();
+      ys.set(id, r.y);
+      items.push({
+        id,
+        date: r.dateRaw,
+        dateISO: toISO(r.dateRaw, refDate),
+        description: r.description,
+        amount: r.amount,
+        type: r.type,
+        typeSource: r.typeSource,
+        kind: cls.kind,
+        nonSpend: cls.nonSpend,
+        confidence: r.confidence,
+        rawText: r.rawText,
+        bankName: detectedBank,
+        statementDate: summary.statementDate,
+        cardNumber: metadata.cardNumber,
+        cardName: cardName || detectedBank,
+        pageNumber: r.page,
+        selected,
+      });
+    }
+  }
+
+  // stable order: page, then top-to-bottom as printed (tables of different groups are merged by position)
+  items.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0) || (ys.get(b.id) || 0) - (ys.get(a.id) || 0));
+
+  const parsedTotal =
+    Math.round(items.filter((i) => i.type === 'DR').reduce((a, b) => a + b.amount, 0) * 100) / 100;
+  const reconciliation = reconcile(parsedTotal, summary);
+
+  let parseConfidence = items.length ? 0.75 : 0;
+  if (reconciliation.statementTotal !== undefined) parseConfidence = reconciliation.matched ? 0.97 : 0.5;
+  if (items.length) {
+    const avg = items.reduce((a, b) => a + (b.confidence || 0.8), 0) / items.length;
+    parseConfidence = Math.min(parseConfidence, 0.5 + avg / 2);
+  }
+
+  const notes: string[] = [];
+  if (issuerMismatch) notes.push(`PDF looks like ${pdfBank} but was uploaded for ${selectedBank}.`);
+  if (indicatorDoc) notes.push('Rows carry Dr/Cr style indicators.');
+
+  return {
+    items,
+    metadata,
+    detectedBank,
+    issuerMismatch,
+    summary,
+    reconciliation,
+    parseConfidence: Math.round(parseConfidence * 100) / 100,
+    diagnostics: { pages: pages.length, textItems, tables, skipped, notes },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* PDF reading                                                         */
+/* ------------------------------------------------------------------ */
+
+async function readPdfLines(file: File, opts?: ParseOptions): Promise<{ pages: Line[][]; textItems: number }> {
+  const arrayBuffer = await file.arrayBuffer();
+  const task = pdfjsLib.getDocument({
+    data: new Uint8Array(arrayBuffer),
+    useSystemFonts: true,
+    password: opts?.password,
+  });
+  let pdf;
+  try {
+    pdf = await task.promise;
+  } catch (e: any) {
+    if (e && (e.name === 'PasswordException' || e.code === 1 || e.code === 2)) {
+      throw new PdfPasswordError(e.code === 2 ? 'PASSWORD_INCORRECT' : 'PASSWORD_REQUIRED');
+    }
+    throw e;
+  }
+  const pages: Line[][] = [];
+  let textItems = 0;
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const items: RawItem[] = [];
+    for (const it of tc.items as any[]) {
+      if (!it.str || !it.str.trim()) continue;
+      const fs = Math.abs(it.transform[3]) || it.height || 8;
+      items.push({
+        str: it.str,
+        x0: it.transform[4],
+        x1: it.transform[4] + (it.width || 0),
+        y: it.transform[5],
+        h: it.height || fs,
+      });
+      textItems++;
+    }
+    pages.push(buildLines(items, p));
+  }
+  if (textItems === 0) {
+    const err: any = new Error(
+      'This PDF has no selectable text (it looks like a scanned image). Please download the digital statement from your bank.'
+    );
+    err.code = 'SCANNED_PDF';
+    throw err;
+  }
+  return { pages, textItems };
+}
+
+/* ------------------------------------------------------------------ */
+/* Public API                                                          */
+/* ------------------------------------------------------------------ */
+
+let lastAnalysis: StatementAnalysis | null = null;
+/** The full analysis (summary, reconciliation, diagnostics...) of the most recent parsePdfStatement call. */
+export function getLastStatementAnalysis(): StatementAnalysis | null {
+  return lastAnalysis;
+}
+
+export async function analyzePdfStatement(
+  file: File,
+  cardIssuer?: string,
+  cardName?: string,
+  opts?: ParseOptions
+): Promise<StatementAnalysis> {
+  const { pages, textItems } = await readPdfLines(file, opts);
+  const analysis = analyzeLines(pages, cardIssuer, cardName, textItems);
+  lastAnalysis = analysis;
+  return analysis;
+}
+
+/** Same signature as before; returns the rows. Use analyzePdfStatement() for summary/reconciliation/diagnostics. */
+export async function parsePdfStatement(
+  file: File,
+  cardId: string,
+  cardIssuer?: string,
+  cardName?: string,
+  opts?: ParseOptions
+): Promise<ExtractedDebitItem[]> {
+  const a = await analyzePdfStatement(file, cardIssuer, cardName, opts);
+  return a.items;
+}
+
+/** Text lines (kept for compatibility / debugging). */
+export async function extractTextFromPdf(file: File, opts?: ParseOptions): Promise<string[]> {
+  const { pages } = await readPdfLines(file, opts);
+  return pages.flat().map((l) => l.text.trim()).filter(Boolean);
+}
+
+/** Paste-text mode: uses exactly the same engine as PDFs. */
+export function parseDebitTransactions(
+  lines: string[],
+  cardId: string,
+  cardName: string,
+  cardIssuer?: string
+): ExtractedDebitItem[] {
+  const ls = linesFromText(lines);
+  return analyzeLines([ls], cardIssuer, cardName, ls.length).items;
+}
+
+export function convertToTransactions(
+  items: ExtractedDebitItem[],
+  cardId: string,
+  cardName: string,
+  billId?: string
+): Transaction[] {
+  return items
+    .filter((item) => item.selected)
+    .map((item) => ({
+      id: item.id || generateId(),
+      bill_id: billId,
+      card_id: cardId,
+      card_name: cardName,
+      date: item.date,
+      description: item.description,
+      amount: item.amount,
+      cost_to_person_id: null,
+      cost_to_person_name: null,
+      created_at: new Date().toISOString(),
+    }));
+}
+```
+
+## TASK 2 — Update ONLY src/components/BillSortingView.tsx to use the new parser API
+The new module exports (in addition to the old names, which still exist):
+- `analyzePdfStatement(file, cardIssuer, cardName, { password? })` → `{ items, detectedBank, issuerMismatch, summary, reconciliation, parseConfidence, diagnostics }`
+- `PdfPasswordError` (has `.code` = 'PASSWORD_REQUIRED' | 'PASSWORD_INCORRECT')
+- each item in `items` is an `ExtractedDebitItem` with the existing fields plus optional `kind` ('purchase'|'fee'|'interest'|'emi'|'payment'|'refund'|'bounce'), `nonSpend` (boolean), `confidence` (0..1), `type` ('DR'|'CR'), `typeSource`, `dateISO`. `selected` is already set correctly by the parser: keep it as given.
+- `reconciliation` is `{ statementTotal?, parsedTotal, delta?, matched, notes[] }`; `diagnostics` is `{ pages, textItems, tables[], skipped{}, notes[] }`.
+
+Changes to make in BillSortingView.tsx:
+1. In the handler that processes a selected PDF, replace the old parsing calls (parsePdfStatement + the extractTextFromPdf/parseDebitTransactions fallback and any other custom parsing code from earlier versions) with ONE call: `const analysis = await analyzePdfStatement(file, card.issuer, `${card.issuer} ${card.card_name}`, { password })`. If `analysis.items.length === 0`, show the error "No transactions could be recognized in this statement. Please verify it is a credit card statement PDF." Otherwise open the review modal with `analysis.items` and keep the whole `analysis` object in the modal state.
+2. Password-protected PDFs: catch `PdfPasswordError` (check with `err instanceof PdfPasswordError` or `err?.name === 'PdfPasswordError'`). Show a small password input in the card's upload area (with the message "This PDF is password protected" or "Incorrect password, try again" when `err.code === 'PASSWORD_INCORRECT'`) and a "Unlock" button that retries with the typed password. For an error with `err.code === 'SCANNED_PDF'`, show `err.message` as is.
+3. Review modal subtitle: show the file name and "Detected: {analysis.detectedBank}" (use the PDF-detected bank, not the card slot).
+4. If `analysis.issuerMismatch`, show a yellow banner at the top of the modal: "This PDF looks like a {analysis.detectedBank} statement but was uploaded to {card.issuer}. Please check you chose the right card."
+5. Footer under "Total Debit Amount": if `analysis.reconciliation.matched` show a small green "Statement says ₹{statementTotal} ✓ matches"; else if `statementTotal` exists show an amber warning using `reconciliation.notes[0]`; if there is no statementTotal show nothing. NEVER block importing because of a mismatch. "Total Debit Amount" remains the sum of the currently CHECKED rows.
+6. Rows: show a small grey badge "Not a spend" when `item.nonSpend`; show a small "FEE" / "EMI" / "INTEREST" badge when `item.kind` is 'fee' / 'emi' / 'interest'; show a small "Credit" badge when `item.type === 'CR'`; show a "low confidence" marker when `item.confidence !== undefined && item.confidence < 0.7`. Descriptions must use CSS `truncate` with a `title` attribute containing the full text. Do NOT truncate descriptions in the data.
+7. Keep everything that already works: per-row checkbox, "Toggle All", remove-row button, the "Import to Combined Table" button and `convertToTransactions` usage, the "Why these rows?" panel if it exists (feed it `analysis.diagnostics`), and all styling.
+8. Remove leftover imports/variables from previous parser versions that no longer exist, so there are no unused or missing imports.
+
+## Rules
+- Do not touch any file other than `src/services/pdfParser.ts` and `src/components/BillSortingView.tsx`. Do not change package.json, vite config or other services.
+- Do not add new dependencies.
+- Make sure `npm run lint` (tsc --noEmit) passes and the app builds.
+- In your reply, list the files you changed and confirm that `pdfParser.ts` is identical to the code I gave. Do not explain the parser.
