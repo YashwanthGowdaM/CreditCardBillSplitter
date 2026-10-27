@@ -17,7 +17,9 @@ import {
   Lock,
   Info,
   ShieldCheck,
+  FolderDown,
 } from 'lucide-react';
+import { SAMPLE_BILLS_DRIVE_URL } from './InstructionsModal';
 import { CreditCard, Person, Transaction, UploadedBill } from '../types';
 import { formatCurrency } from '../services/pdfGenerator';
 import {
@@ -423,15 +425,27 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
               Select monthly PDF statements for each card. Only debit / DR transactions will be extracted.
             </p>
           </div>
-          <button
-            onClick={() => {
-              setPasteMode(true);
-              setPastedText('');
-            }}
-            className="text-[13px] text-slate-600 hover:text-slate-900 font-medium underline underline-offset-2 transition-colors"
-          >
-            Paste Statement Text
-          </button>
+          <div className="flex items-center gap-3">
+            <a
+              href={SAMPLE_BILLS_DRIVE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[13px] text-amber-700 hover:text-amber-900 font-medium underline underline-offset-2 flex items-center gap-1 transition-colors"
+            >
+              <FolderDown className="w-3.5 h-3.5" />
+              <span>Practice Bills (Google Drive)</span>
+            </a>
+            <span className="text-slate-300">|</span>
+            <button
+              onClick={() => {
+                setPasteMode(true);
+                setPastedText('');
+              }}
+              className="text-[13px] text-slate-600 hover:text-slate-900 font-medium underline underline-offset-2 transition-colors"
+            >
+              Paste Statement Text
+            </button>
+          </div>
         </div>
 
         {cards.length === 0 ? (

@@ -8,6 +8,7 @@ import { BillSortingView } from './components/BillSortingView';
 import { MyShareView } from './components/MyShareView';
 import { SettingsView } from './components/SettingsView';
 import { AdminLockModal } from './components/AdminLockModal';
+import { InstructionsModal } from './components/InstructionsModal';
 import { ActiveTab, CreditCard, Person, Transaction, UploadedBill } from './types';
 import {
   fetchCards,
@@ -35,6 +36,21 @@ export default function App() {
   const [uploadedBills, setUploadedBills] = useState<UploadedBill[]>([]);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Instructions Modal state (Auto-shows on every new session)
+  const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
+
+  useEffect(() => {
+    const hasSeenInSession = sessionStorage.getItem('cardsplit_session_seen_instructions');
+    if (!hasSeenInSession) {
+      setIsInstructionsOpen(true);
+    }
+  }, []);
+
+  const handleCloseInstructions = () => {
+    sessionStorage.setItem('cardsplit_session_seen_instructions', 'true');
+    setIsInstructionsOpen(false);
+  };
 
   // Admin lock state
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -183,16 +199,6 @@ export default function App() {
     setUploadedBills(updated);
   };
 
-  const handleHeaderQuickAction = () => {
-    if (activeTab === 'dashboard' || activeTab === 'sorting') {
-      setActiveTab('sorting');
-    } else if (activeTab === 'cards') {
-      setActiveTab('cards');
-    } else if (activeTab === 'people') {
-      setActiveTab('people');
-    }
-  };
-
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
       {/* Left Sidebar */}
@@ -211,11 +217,11 @@ export default function App() {
           isSupabaseConnected={isSupabaseConnected}
           isUnlocked={isUnlocked}
           onToggleLock={handleToggleLock}
-          onQuickAction={handleHeaderQuickAction}
           onSyncDatabase={async () => {
             await syncAllLocalDataToSupabase();
             await loadAllData();
           }}
+          onOpenInstructions={() => setIsInstructionsOpen(true)}
         />
 
         <main className="flex-1 pb-12">
@@ -304,6 +310,12 @@ export default function App() {
         }}
         onSuccess={handleLockSuccess}
         actionDescription={lockModalDescription}
+      />
+
+      {/* Welcome & Practice Instructions Modal (New session popup) */}
+      <InstructionsModal
+        isOpen={isInstructionsOpen}
+        onClose={handleCloseInstructions}
       />
     </div>
   );

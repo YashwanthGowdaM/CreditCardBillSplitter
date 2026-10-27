@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { Database, Plus, Upload, CheckCircle2, RefreshCw, Check, Lock, Unlock } from 'lucide-react';
+import { Database, CheckCircle2, RefreshCw, Check, Lock, Unlock, FolderDown, ExternalLink } from 'lucide-react';
 import { ActiveTab } from '../types';
+import { SAMPLE_BILLS_DRIVE_URL } from './InstructionsModal';
 
 interface HeaderProps {
   activeTab: ActiveTab;
   isSupabaseConnected: boolean;
   isUnlocked: boolean;
   onToggleLock: () => void;
-  onQuickAction?: () => void;
   onSyncDatabase?: () => Promise<void>;
+  onOpenInstructions?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,7 +17,6 @@ export const Header: React.FC<HeaderProps> = ({
   isSupabaseConnected,
   isUnlocked,
   onToggleLock,
-  onQuickAction,
   onSyncDatabase,
 }) => {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -39,52 +39,21 @@ export const Header: React.FC<HeaderProps> = ({
   const getTabDetails = (tab: ActiveTab) => {
     switch (tab) {
       case 'dashboard':
-        return {
-          title: 'Dashboard Overview',
-          breadcrumb: 'Overview',
-          buttonLabel: 'Upload Bill',
-          buttonIcon: Upload,
-        };
+        return { title: 'Dashboard Overview', breadcrumb: 'Overview' };
       case 'cards':
-        return {
-          title: 'Credit Cards',
-          breadcrumb: 'Credit Cards',
-          buttonLabel: 'Add Credit Card',
-          buttonIcon: Plus,
-        };
+        return { title: 'Credit Cards', breadcrumb: 'Credit Cards' };
       case 'people':
-        return {
-          title: 'People',
-          breadcrumb: 'People',
-          buttonLabel: 'Add Person',
-          buttonIcon: Plus,
-        };
+        return { title: 'People', breadcrumb: 'People' };
       case 'sorting':
-        return {
-          title: 'Bill Sorting',
-          breadcrumb: 'Bill Sorting',
-          buttonLabel: 'Upload & Sort',
-          buttonIcon: Upload,
-        };
+        return { title: 'Bill Sorting', breadcrumb: 'Bill Sorting' };
       case 'share':
-        return {
-          title: 'My Share & PDF Export',
-          breadcrumb: 'My Share',
-          buttonLabel: null,
-          buttonIcon: null,
-        };
+        return { title: 'My Share & PDF Export', breadcrumb: 'My Share' };
       case 'settings':
-        return {
-          title: 'Application Settings',
-          breadcrumb: 'Settings',
-          buttonLabel: null,
-          buttonIcon: null,
-        };
+        return { title: 'Application Settings', breadcrumb: 'Settings' };
     }
   };
 
   const details = getTabDetails(activeTab);
-  const ActionIcon = details.buttonIcon;
 
   return (
     <header className="h-16 px-8 border-b border-slate-200/80 bg-white flex items-center justify-between sticky top-0 z-10 print:hidden">
@@ -95,8 +64,21 @@ export const Header: React.FC<HeaderProps> = ({
         <h1 className="text-[15px] font-semibold text-slate-900 tracking-tight">{details.title}</h1>
       </div>
 
-      {/* Right: Lock status, Storage connection status & Action button */}
+      {/* Right: Practice Drive link, Lock status, Storage connection status & Sync button */}
       <div className="flex items-center gap-3">
+        {/* Practice Bills Google Drive Link */}
+        <a
+          href={SAMPLE_BILLS_DRIVE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium bg-amber-50/80 text-amber-900 border border-amber-200/80 hover:bg-amber-100 transition-colors shrink-0 shadow-2xs"
+          title="Download sample fake credit card bills from Google Drive for practice"
+        >
+          <FolderDown className="w-3.5 h-3.5 text-amber-700" />
+          <span>Practice Bills</span>
+          <ExternalLink className="w-3 h-3 text-amber-600" />
+        </a>
+
         {/* Admin Lock Status Pill */}
         <button
           onClick={onToggleLock}
@@ -161,18 +143,8 @@ export const Header: React.FC<HeaderProps> = ({
             </>
           )}
         </div>
-
-        {/* Action Button */}
-        {details.buttonLabel && ActionIcon && onQuickAction && (
-          <button
-            onClick={onQuickAction}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 transition-colors shadow-xs"
-          >
-            <ActionIcon className="w-4 h-4" />
-            <span>{details.buttonLabel}</span>
-          </button>
-        )}
       </div>
     </header>
   );
 };
+
