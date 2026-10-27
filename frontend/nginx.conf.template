@@ -1,10 +1,6 @@
 # ------------------------------------------------------------------------------
 # CardSplit - Nginx config (the official nginx image fills in ${BACKEND_HOST} and
 # ${BACKEND_PORT} from environment variables when the container starts).
-#
-#   Browser --> Nginx (port 80)
-#                 |-- /api/*  --> backend container
-#                 |-- /*      --> static React files (SPA)
 # ------------------------------------------------------------------------------
 server {
     listen 80;
@@ -18,8 +14,6 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/javascript image/svg+xml;
 
-    # Docker's built-in DNS. Using a variable below means Nginx still starts
-    # even if the backend container is a few seconds late.
     resolver 127.0.0.11 valid=10s ipv6=off;
 
     # ---- API: forward to the backend microservice ----
@@ -34,7 +28,16 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # ---- Static assets: cache for a long time (file names contain a content hash) ----
+    # ---- .mjs (pdf.js worker): must be served as JavaScript ----
+    # Regex locations win over the /assets/ prefix location below.
+    location ~* \.mjs$ {
+        default_type application/javascript;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # ---- Static assets: cached long (file names contain a content hash) ----
     location /assets/ {
         expires 30d;
         add_header Cache-Control "public, immutable";
