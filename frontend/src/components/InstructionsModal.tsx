@@ -44,7 +44,7 @@ export const InstructionsModal: React.FC<InstructionsModalProps> = ({ isOpen, on
             <span>About CreditSplit</span>
           </h3>
           <p className="text-[13px] text-slate-700 font-normal leading-relaxed bg-slate-50/80 p-4 rounded-xl border border-slate-200/80">
-            CreditSplit is an intelligent credit card bill manager and expense splitter designed to automatically parse PDF bank statements, extract debit transactions, and split shared costs among friends, flatmates, or family members. It organizes multiple credit cards, assigns individual expense shares, syncs securely with your Supabase PostgreSQL database, and generates itemized PDF statements for hassle-free settlements.
+            CreditSplit is an intelligent credit card bill manager and expense splitter designed to automatically parse PDF bank statements, extract debit transactions, and split shared costs among friends, flatmates, or family members. It organizes multiple credit cards, assigns individual expense shares, stores everything securely in your own PostgreSQL database, and generates itemized PDF statements for hassle-free settlements.
           </p>
         </div>
 
@@ -80,7 +80,7 @@ export const InstructionsModal: React.FC<InstructionsModalProps> = ({ isOpen, on
               <span>Free Features</span>
             </div>
             <p className="text-slate-500 font-normal leading-tight">
-              PDF Export & DB Sync are unlocked and available to all users.
+              PDF Export & Refresh Data are unlocked and available to all users.
             </p>
           </div>
 
@@ -90,7 +90,7 @@ export const InstructionsModal: React.FC<InstructionsModalProps> = ({ isOpen, on
               <span>Admin Protection</span>
             </div>
             <p className="text-slate-500 font-normal leading-tight">
-              Data edits use master password in <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">.env</code>.
+              Data edits use the master password set in <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">.env</code>.
             </p>
           </div>
         </div>

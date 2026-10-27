@@ -5,7 +5,7 @@ import { SAMPLE_BILLS_DRIVE_URL } from './InstructionsModal';
 
 interface HeaderProps {
   activeTab: ActiveTab;
-  isSupabaseConnected: boolean;
+  isBackendConnected: boolean;
   isUnlocked: boolean;
   onToggleLock: () => void;
   onSyncDatabase?: () => Promise<void>;
@@ -14,7 +14,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
-  isSupabaseConnected,
+  isBackendConnected,
   isUnlocked,
   onToggleLock,
   onSyncDatabase,
@@ -64,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
         <h1 className="text-[15px] font-semibold text-slate-900 tracking-tight">{details.title}</h1>
       </div>
 
-      {/* Right: Practice Drive link, Lock status, Storage connection status & Sync button */}
+      {/* Right: Practice Drive link, Lock status, Backend connection status & Refresh button */}
       <div className="flex items-center gap-3">
         {/* Practice Bills Google Drive Link */}
         <a
@@ -106,7 +106,7 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* Sync Data with DB Button (Always Unlocked) */}
+        {/* Refresh Data Button (Always Unlocked) */}
         {onSyncDatabase && (
           <button
             onClick={handleSyncClick}
@@ -116,7 +116,7 @@ export const Header: React.FC<HeaderProps> = ({
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 : 'bg-slate-100/90 text-slate-700 hover:bg-slate-200/80 border-slate-200/80'
             }`}
-            title="Sync all local data with Supabase Database (Unlocked for all users)"
+            title="Reload all data from the backend service (available to everyone)"
           >
             {isSyncing ? (
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-600" />
@@ -125,21 +125,21 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
             )}
-            <span>{isSyncing ? 'Syncing...' : justSynced ? 'Database Synced!' : 'Sync Data'}</span>
+            <span>{isSyncing ? 'Refreshing...' : justSynced ? 'Data Refreshed!' : 'Refresh Data'}</span>
           </button>
         )}
 
         {/* Storage status pill */}
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium bg-slate-100/80 text-slate-600 border border-slate-200/60">
-          {isSupabaseConnected ? (
+          {isBackendConnected ? (
             <>
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Supabase Connected</span>
+              <span>API &amp; Database Connected</span>
             </>
           ) : (
             <>
-              <Database className="w-3.5 h-3.5 text-slate-400" />
-              <span>Local Storage Active</span>
+              <Database className="w-3.5 h-3.5 text-rose-500" />
+              <span>Backend Offline</span>
             </>
           )}
         </div>

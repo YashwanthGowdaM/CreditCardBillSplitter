@@ -1,0 +1,55 @@
+# ------------------------------------------------------------------------------
+# CardSplit - Nginx config (the official nginx image fills in ${BACKEND_HOST} and
+# ${BACKEND_PORT} from environment variables when the container starts).
+#
+#   Browser --> Nginx (port 80)
+#                 |-- /api/*  --> backend container
+#                 |-- /*      --> static React files (SPA)
+# ------------------------------------------------------------------------------
+server {
+    listen 80;
+    server_name _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    client_max_body_size 50m;   # large JSON backups
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/javascript image/svg+xml;
+
+    # Docker's built-in DNS. Using a variable below means Nginx still starts
+    # even if the backend container is a few seconds late.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    # ---- API: forward to the backend microservice ----
+    location /api/ {
+        set $backend_upstream http://${BACKEND_HOST}:${BACKEND_PORT};
+        proxy_pass         $backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
+    # ---- Static assets: cache for a long time (file names contain a content hash) ----
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    location /fonts/ {
+        expires 30d;
+        add_header Cache-Control "public";
+        try_files $uri =404;
+    }
+
+    # ---- Single Page App: always fall back to index.html ----
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+}

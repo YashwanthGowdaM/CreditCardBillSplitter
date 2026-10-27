@@ -1,0 +1,88 @@
+# =============================================================================
+# CardSplit - Docker Compose
+# Starts all three microservices together:
+#
+#   frontend (Nginx + React)  -->  backend (Node/Express API)  -->  database (PostgreSQL)
+#
+# Usage:   docker compose up -d --build
+# =============================================================================
+name: cardsplit
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1) DATABASE  - PostgreSQL 16, schema is created automatically on first start
+  # ---------------------------------------------------------------------------
+  database:
+    build: ./database
+    image: cardsplit/database:1.0
+    container_name: cardsplit-database
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-cardsplit}
+      POSTGRES_USER: ${DB_USER:-cardsplit}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cardsplit_secret}
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # your data survives restarts
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # The database is private (only reachable by the backend).
+    # Uncomment to inspect it from your computer with a tool such as DBeaver / pgAdmin:
+    # ports:
+    #   - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+
+  # ---------------------------------------------------------------------------
+  # 2) BACKEND  - REST API (Node.js + Express)
+  # ---------------------------------------------------------------------------
+  backend:
+    build: ./backend
+    image: cardsplit/backend:1.0
+    container_name: cardsplit-backend
+    restart: unless-stopped
+    environment:
+      PORT: 5000
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-cardsplit}
+      DB_USER: ${DB_USER:-cardsplit}
+      DB_PASSWORD: ${DB_PASSWORD:-cardsplit_secret}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    depends_on:
+      database:
+        condition: service_healthy      # wait until PostgreSQL accepts connections
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"    # handy for testing: http://localhost:5000/api/health
+    networks:
+      - app-net
+
+  # ---------------------------------------------------------------------------
+  # 3) FRONTEND - React app served by Nginx (also proxies /api to the backend)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build: ./frontend
+    image: cardsplit/frontend:1.0
+    container_name: cardsplit-frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: 5000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"     # open http://localhost:3000
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  pgdata:

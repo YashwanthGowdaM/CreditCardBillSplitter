@@ -20,23 +20,33 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isChecking, setIsChecking] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password) {
       setErrorMsg('Please enter the admin password.');
       return;
     }
 
-    if (verifyAdminPassword(password)) {
-      setErrorMsg('');
-      setPassword('');
-      onSuccess();
-      onClose();
-    } else {
-      setErrorMsg('Incorrect password. To reset, update VITE_ADMIN_PASSWORD in .env');
+    try {
+      setIsChecking(true);
+      // The password is checked by the backend service
+      const ok = await verifyAdminPassword(password);
+      if (ok) {
+        setErrorMsg('');
+        setPassword('');
+        onSuccess();
+        onClose();
+      } else {
+        setErrorMsg('Incorrect password. To reset it, change ADMIN_PASSWORD in the .env file and restart the backend.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Could not verify the password. Is the backend running?');
+    } finally {
+      setIsChecking(false);
     }
   };
 
@@ -117,7 +127,7 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
               <span>Password Security</span>
             </div>
             <p className="leading-snug">
-              Master password is stored in <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code> under <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">VITE_ADMIN_PASSWORD</code>. To change or reset, edit <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code>.
+              The master password is verified by the backend service and set in <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code> as <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">ADMIN_PASSWORD</code>. To change it, edit <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code> and restart the stack.
             </p>
           </div>
 
@@ -132,10 +142,11 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+              disabled={isChecking}
+              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors shadow-xs"
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Verify & Unlock</span>
+              <span>{isChecking ? 'Checking...' : 'Verify & Unlock'}</span>
             </button>
           </div>
         </form>

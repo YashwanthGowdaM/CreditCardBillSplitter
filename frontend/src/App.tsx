@@ -24,9 +24,9 @@ import {
   clearAllTransactions,
   fetchUploadedBills,
   saveUploadedBill,
-  syncAllLocalDataToSupabase,
 } from './services/storage';
-import { getSupabaseClient, testSupabaseConnection, getSavedSupabaseConfig } from './services/supabase';
+import { checkBackendHealth } from './services/api';
+import { clearAdminSession } from './services/adminLock';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -34,7 +34,8 @@ export default function App() {
   const [people, setPeople] = useState<Person[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [uploadedBills, setUploadedBills] = useState<UploadedBill[]>([]);
-  const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [backendMessage, setBackendMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
   // Instructions Modal state (Auto-shows on every new session)
@@ -74,6 +75,7 @@ export default function App() {
 
   const handleToggleLock = () => {
     if (isUnlocked) {
+      clearAdminSession();
       setIsUnlocked(false);
     } else {
       setLockModalDescription('Enter master admin password to allow adding, editing, deleting, or importing data.');
@@ -93,20 +95,10 @@ export default function App() {
   const loadAllData = useCallback(async () => {
     try {
       setIsLoading(true);
-      // Check supabase status and sync local data if connected
-      const config = getSavedSupabaseConfig();
-      if (config.url && config.anonKey) {
-        const client = getSupabaseClient();
-        if (client) {
-          const test = await testSupabaseConnection(config.url, config.anonKey);
-          setIsSupabaseConnected(test.success);
-          if (test.success) {
-            await syncAllLocalDataToSupabase();
-          }
-        }
-      } else {
-        setIsSupabaseConnected(false);
-      }
+      // Check that the backend microservice (and its database) is reachable
+      const health = await checkBackendHealth();
+      setIsBackendConnected(health.ok);
+      setBackendMessage(health.message);
 
       const [cardsData, peopleData, txsData, billsData] = await Promise.all([
         fetchCards(),
@@ -214,15 +206,22 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <Header
           activeTab={activeTab}
-          isSupabaseConnected={isSupabaseConnected}
+          isBackendConnected={isBackendConnected}
           isUnlocked={isUnlocked}
           onToggleLock={handleToggleLock}
-          onSyncDatabase={async () => {
-            await syncAllLocalDataToSupabase();
-            await loadAllData();
-          }}
+          onSyncDatabase={loadAllData}
           onOpenInstructions={() => setIsInstructionsOpen(true)}
         />
+
+        {!isLoading && !isBackendConnected && (
+          <div className="mx-8 mt-6 p-4 bg-rose-50 border border-rose-200 rounded-xl text-[13px] text-rose-800">
+            <div className="font-semibold">Backend service is not reachable</div>
+            <p className="mt-1 font-normal leading-relaxed">
+              {backendMessage} Start the stack with <code className="bg-rose-100 px-1 rounded">docker compose up -d</code>,
+              then use the <span className="font-medium">Refresh Data</span> button above.
+            </p>
+          </div>
+        )}
 
         <main className="flex-1 pb-12">
           {isLoading ? (
@@ -289,8 +288,7 @@ export default function App() {
               {activeTab === 'settings' && (
                 <SettingsView
                   onRefreshAllData={loadAllData}
-                  isSupabaseConnected={isSupabaseConnected}
-                  setIsSupabaseConnected={setIsSupabaseConnected}
+                  isBackendConnected={isBackendConnected}
                   isUnlocked={isUnlocked}
                   onRequireUnlock={requireUnlock}
                   onToggleLock={handleToggleLock}

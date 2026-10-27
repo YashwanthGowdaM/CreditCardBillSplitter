@@ -2,72 +2,64 @@ import React, { useState, useRef } from 'react';
 import {
   Database,
   CheckCircle2,
-  Copy,
-  Check,
   RefreshCw,
   Download,
   Upload,
-  HardDrive,
+  ServerCrash,
   ShieldCheck,
   Layers,
   Lock,
   Unlock,
   KeyRound,
+  HardDriveUpload,
 } from 'lucide-react';
-import {
-  getSavedSupabaseConfig,
-  SUPABASE_SQL_SCHEMA,
-} from '../services/supabase';
+import { getApiBaseUrl } from '../services/api';
 import {
   exportAllData,
   importData,
-  syncAllLocalDataToSupabase,
+  getLegacyLocalDataSummary,
+  migrateLegacyLocalData,
+  clearLegacyLocalData,
 } from '../services/storage';
 
 interface SettingsViewProps {
   onRefreshAllData: () => Promise<void>;
-  isSupabaseConnected: boolean;
-  setIsSupabaseConnected: (val: boolean) => void;
+  isBackendConnected: boolean;
   isUnlocked: boolean;
   onRequireUnlock: (action: () => void, description?: string) => void;
   onToggleLock: () => void;
 }
 
+const codeCls = 'bg-slate-200 px-1 py-0.5 rounded text-slate-800 font-mono text-[11px]';
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   onRefreshAllData,
-  isSupabaseConnected,
+  isBackendConnected,
   isUnlocked,
   onRequireUnlock,
   onToggleLock,
 }) => {
-  const config = getSavedSupabaseConfig();
-  const [syncingData, setSyncingData] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
-  const [copiedSchema, setCopiedSchema] = useState(false);
+  const [legacy, setLegacy] = useState(() => getLegacyLocalDataSummary());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleManualSync = async () => {
-    setSyncingData(true);
-    setActionSuccessMsg(null);
-    try {
-      const res = await syncAllLocalDataToSupabase();
-      await onRefreshAllData();
-      if (res.success) {
-        setActionSuccessMsg(res.message);
-      } else {
-        alert(res.message);
-      }
-    } catch (err: any) {
-      alert('Sync failed: ' + (err?.message || String(err)));
-    } finally {
-      setSyncingData(false);
-    }
+  const showSuccess = (msg: string) => {
+    setActionSuccessMsg(msg);
+    setTimeout(() => setActionSuccessMsg(null), 5000);
   };
 
-  const handleCopySchema = () => {
-    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
-    setCopiedSchema(true);
-    setTimeout(() => setCopiedSchema(false), 3000);
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setActionSuccessMsg(null);
+    try {
+      await onRefreshAllData();
+      showSuccess('Data reloaded from the backend service.');
+    } catch (err: any) {
+      alert('Refresh failed: ' + (err?.message || String(err)));
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleExportBackup = async () => {
@@ -80,21 +72,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       a.download = `CardSplit_Backup_${new Date().toISOString().substring(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Export failed.');
+      alert('Export failed: ' + (err?.message || 'unknown error'));
     }
   };
 
   const handleImportBackupClick = () => {
     onRequireUnlock(() => {
       fileInputRef.current?.click();
-    }, 'Importing and overwriting backup data requires admin authorization.');
+    }, 'Importing backup data requires admin authorization.');
   };
 
   const handleImportBackupFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const input = e.target;
 
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -102,15 +95,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         const text = event.target?.result as string;
         await importData(text);
         await onRefreshAllData();
-        setActionSuccessMsg('Backup imported and synced to database successfully!');
-        setTimeout(() => setActionSuccessMsg(null), 4000);
+        showSuccess('Backup imported into the database successfully!');
       } catch (err: any) {
         alert('Failed to import backup: ' + (err as Error).message);
       } finally {
-        if (e.target) e.target.value = '';
+        input.value = '';
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleMigrateLegacy = () => {
+    onRequireUnlock(async () => {
+      try {
+        await migrateLegacyLocalData();
+        clearLegacyLocalData();
+        setLegacy(getLegacyLocalDataSummary());
+        await onRefreshAllData();
+        showSuccess('Old browser data was copied into the database.');
+      } catch (err: any) {
+        alert('Migration failed: ' + (err?.message || String(err)));
+      }
+    }, 'Copying old browser data into the database requires admin authorization.');
   };
 
   return (
@@ -119,7 +125,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div>
         <h2 className="text-[20px] font-semibold text-slate-900 tracking-tight">Application Settings</h2>
         <p className="text-[12px] font-normal text-slate-500 mt-1">
-          Manage your cloud database connection, trigger data synchronization, master lock security, or export JSON backups.
+          Check the backend &amp; database connection, manage the master lock, or export / import JSON backups.
         </p>
       </div>
 
@@ -135,7 +141,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div>
               <h3 className="text-[16px] font-semibold text-slate-900">Admin Modification Lock</h3>
               <p className="text-[12px] font-normal text-slate-500 mt-0.5">
-                Restricts Add, Edit, Delete, and Import features. PDF Export & DB Sync are always unlocked.
+                Restricts Add, Edit, Delete, and Import features. PDF Export &amp; Refresh are always available.
               </p>
             </div>
           </div>
@@ -165,15 +171,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2 text-[13px]">
           <div className="flex items-center gap-2 font-medium text-slate-800">
             <KeyRound className="w-4 h-4 text-slate-500" />
-            <span>Master Password Configuration (`.env`)</span>
+            <span>Master Password Configuration (<code className={codeCls}>.env</code>)</span>
           </div>
           <p className="text-slate-600 font-normal leading-relaxed text-[12px]">
-            The admin password is read strictly from <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800 font-mono text-[11px]">VITE_ADMIN_PASSWORD</code> in your <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800 font-mono text-[11px]">.env</code> file. To reset or change your password, update <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800 font-mono text-[11px]">.env</code> directly.
+            The admin password is set with <code className={codeCls}>ADMIN_PASSWORD</code> in the <code className={codeCls}>.env</code> file
+            next to <code className={codeCls}>docker-compose.yml</code> and is verified by the backend service &mdash; it is never
+            shipped to the browser. After changing it, run <code className={codeCls}>docker compose up -d</code> again.
           </p>
         </div>
       </div>
 
-      {/* SECTION 2: Database Status & Sync Panel */}
+      {/* SECTION 2: Backend & Database Status */}
       <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-xs space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">
@@ -181,9 +189,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-[16px] font-semibold text-slate-900">Supabase Database Connection</h3>
+              <h3 className="text-[16px] font-semibold text-slate-900">Backend &amp; Database Connection</h3>
               <p className="text-[12px] font-normal text-slate-500 mt-0.5">
-                Configured securely via environment variables (`.env`).
+                Frontend &rarr; Backend API &rarr; PostgreSQL (three separate containers).
               </p>
             </div>
           </div>
@@ -191,32 +199,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="flex items-center gap-3">
             <span
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium ${
-                isSupabaseConnected
+                isBackendConnected
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                  : 'bg-rose-50 text-rose-700 border border-rose-200'
               }`}
             >
-              {isSupabaseConnected ? (
+              {isBackendConnected ? (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Connected to Supabase</span>
+                  <span>Connected</span>
                 </>
               ) : (
                 <>
-                  <HardDrive className="w-4 h-4 text-slate-400" />
-                  <span>Local Mode</span>
+                  <ServerCrash className="w-4 h-4 text-rose-500" />
+                  <span>Backend Offline</span>
                 </>
               )}
             </span>
 
             <button
-              onClick={handleManualSync}
-              disabled={syncingData}
+              onClick={handleRefresh}
+              disabled={refreshing}
               className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors shadow-xs"
-              title="Unlocked for all users"
             >
-              <RefreshCw className={`w-4 h-4 ${syncingData ? 'animate-spin' : ''}`} />
-              <span>{syncingData ? 'Syncing...' : 'Sync Data with DB'}</span>
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              <span>{refreshing ? 'Refreshing...' : 'Refresh Data'}</span>
             </button>
           </div>
         </div>
@@ -232,55 +239,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200/80 space-y-1">
             <div className="text-slate-500 font-medium text-[12px] flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>Database Endpoint</span>
+              <span>API Endpoint</span>
             </div>
-            <div className="font-medium text-slate-800">
-              {config.url ? 'Configured & Secured (.env)' : 'Not configured'}
-            </div>
+            <div className="font-medium text-slate-800 break-all">{getApiBaseUrl()}</div>
           </div>
 
           <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200/80 space-y-1">
             <div className="text-slate-500 font-medium text-[12px] flex items-center gap-1.5">
               <Layers className="w-4 h-4 text-slate-400" />
-              <span>Storage Bucket</span>
+              <span>Database</span>
             </div>
-            <div className="font-medium text-slate-800">
-              {config.storageBucket || 'credit-card-bills'}
-            </div>
+            <div className="font-medium text-slate-800">PostgreSQL (persistent Docker volume)</div>
           </div>
-        </div>
-
-        {/* Copy SQL Schema section */}
-        <div className="pt-4 border-t border-slate-100 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="text-[14px] font-semibold text-slate-900">Database Schema Script</h4>
-              <p className="text-[12px] font-normal text-slate-500 mt-0.5">
-                Run this SQL in your Supabase SQL Editor to initialize PostgreSQL tables:
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleCopySchema}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-[13px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200/80 rounded-lg transition-colors shrink-0"
-            >
-              {copiedSchema ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-              <span>{copiedSchema ? 'Copied!' : 'Copy SQL Schema'}</span>
-            </button>
-          </div>
-
-          <pre className="p-3.5 bg-slate-50/80 rounded-lg border border-slate-200/80 text-[12px] font-normal text-slate-700 max-h-36 overflow-y-auto leading-relaxed whitespace-pre-wrap">
-            {SUPABASE_SQL_SCHEMA}
-          </pre>
         </div>
       </div>
 
       {/* SECTION 3: Data Backup & Restore */}
       <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div>
-          <h3 className="text-[16px] font-semibold text-slate-900">Backup & Data Portability</h3>
+          <h3 className="text-[16px] font-semibold text-slate-900">Backup &amp; Data Portability</h3>
           <p className="text-[12px] font-normal text-slate-500 mt-0.5">
-            Export a full JSON backup (unlocked) or import/restore data (requires admin password).
+            Export a full JSON backup (always available) or import one (requires admin password). Importing merges
+            the backup into the database &mdash; existing records are updated, nothing is deleted.
           </p>
         </div>
 
@@ -309,6 +289,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           />
         </div>
       </div>
+
+      {/* SECTION 4: Old browser data (only shown when something is found) */}
+      {legacy.total > 0 && (
+        <div className="bg-amber-50/70 rounded-xl border border-amber-200/90 p-6 shadow-xs space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+              <HardDriveUpload className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-[16px] font-semibold text-amber-950">Data from the old version found in this browser</h3>
+              <p className="text-[12px] font-normal text-amber-900 mt-0.5 leading-relaxed">
+                The previous version stored data in your browser. Found: {legacy.cards} cards, {legacy.people} people,{' '}
+                {legacy.bills} bills and {legacy.transactions} transactions. Copy them into the database once, so they are
+                available from any device.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleMigrateLegacy}
+            className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors shadow-xs"
+          >
+            <HardDriveUpload className="w-4 h-4" />
+            <span>Copy to Database {!isUnlocked && '🔒'}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

@@ -46,11 +46,4 @@ export interface Transaction {
   created_at: string;
 }
 
-export interface SupabaseConfig {
-  url: string;
-  anonKey: string;
-  storageBucket: string;
-  isConnected: boolean;
-}
-
 export type ActiveTab = 'dashboard' | 'cards' | 'people' | 'sorting' | 'share' | 'settings';
