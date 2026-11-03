@@ -87,7 +87,7 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
           <div>
             <label className="block text-[13px] font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-slate-400" />
-              <span>Enter Admin Password</span>
+              <span>Enter Admin Password (Yash@123)</span>
             </label>
             <div className="relative">
               <input
