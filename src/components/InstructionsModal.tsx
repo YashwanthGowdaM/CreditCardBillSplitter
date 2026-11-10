@@ -14,7 +14,7 @@ export const InstructionsModal: React.FC<InstructionsModalProps> = ({ isOpen, on
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-6 sm:p-7 max-w-lg w-full shadow-2xl space-y-6 animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-7 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-6 animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -73,7 +73,7 @@ export const InstructionsModal: React.FC<InstructionsModalProps> = ({ isOpen, on
         </div>
 
         {/* Key Tips / Quick Guide */}
-        <div className="grid grid-cols-2 gap-3 text-[12px]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12px]">
           <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/70 space-y-1">
             <div className="font-semibold text-slate-800 flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />

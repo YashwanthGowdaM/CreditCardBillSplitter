@@ -740,18 +740,106 @@ export async function exportAllData(): Promise<string> {
   return JSON.stringify(exportPayload, null, 2);
 }
 
+/* ---------- Backup import validation (untrusted input) ---------- */
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_RECORDS = 50_000;
+const NETWORKS = ['Visa', 'MasterCard', 'RuPay', 'Amex', 'Diners Club'];
+
+const str = (v: unknown, max = 500): string =>
+  typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : '';
+const optStr = (v: unknown, max = 500): string | undefined => {
+  const out = str(v, max).trim();
+  return out ? out : undefined;
+};
+const iso = (v: unknown): string => {
+  const d = typeof v === 'string' ? new Date(v) : null;
+  return d && !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString();
+};
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const idOf = (v: unknown): string => {
+  const s = str(v, 64).trim();
+  return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : generateId();
+};
+const arr = (v: unknown): any[] => {
+  if (!Array.isArray(v)) return [];
+  if (v.length > MAX_RECORDS) throw new Error('Backup contains too many records.');
+  return v.filter((x) => x && typeof x === 'object' && !Array.isArray(x));
+};
+
+function sanitizeBackup(data: any) {
+  const cards: CreditCard[] = arr(data.cards).map((c) => ({
+    id: idOf(c.id),
+    issuer: str(c.issuer, 100).trim(),
+    card_name: str(c.card_name, 100).trim(),
+    network: NETWORKS.includes(c.network) ? c.network : 'Visa',
+    bill_due_date: str(c.bill_due_date, 40).trim(),
+    statement_date: str(c.statement_date, 40).trim(),
+    last_4_digits: /^\d{4}$/.test(String(c.last_4_digits ?? '')) ? String(c.last_4_digits) : undefined,
+    created_at: iso(c.created_at),
+    updated_at: iso(c.updated_at),
+  }));
+  const people: Person[] = arr(data.people).map((p) => ({
+    id: idOf(p.id),
+    name: str(p.name, 100).trim(),
+    phone: optStr(p.phone, 30),
+    notes: optStr(p.notes, 1000),
+    created_at: iso(p.created_at),
+    updated_at: iso(p.updated_at),
+  }));
+  const bills: UploadedBill[] = arr(data.bills).map((b) => ({
+    id: idOf(b.id),
+    card_id: idOf(b.card_id),
+    card_name: str(b.card_name, 200),
+    file_name: str(b.file_name, 255),
+    file_size: b.file_size == null ? undefined : num(b.file_size),
+    uploaded_at: iso(b.uploaded_at),
+    storage_path: optStr(b.storage_path, 500),
+    total_debits: num(b.total_debits),
+    transaction_count: Math.max(0, Math.floor(num(b.transaction_count))),
+  }));
+  const transactions: Transaction[] = arr(data.transactions).map((t) => ({
+    id: idOf(t.id),
+    bill_id: t.bill_id ? idOf(t.bill_id) : undefined,
+    card_id: idOf(t.card_id),
+    card_name: str(t.card_name, 200),
+    date: str(t.date, 40),
+    description: str(t.description, 500),
+    amount: num(t.amount),
+    cost_to_person_id: t.cost_to_person_id ? idOf(t.cost_to_person_id) : null,
+    cost_to_person_name: t.cost_to_person_name ? str(t.cost_to_person_name, 100) : null,
+    created_at: iso(t.created_at),
+  }));
+  return {
+    cards: cards.filter((c) => c.issuer && c.card_name),
+    people: people.filter((p) => p.name),
+    bills,
+    transactions: transactions.filter((t) => t.description),
+  };
+}
+
 export async function importData(jsonData: string): Promise<void> {
-  const parsed = JSON.parse(jsonData);
-  if (!parsed || !parsed.data) {
+  if (typeof jsonData !== 'string' || jsonData.length > MAX_IMPORT_BYTES) {
+    throw new Error('Backup file is too large (max 10 MB).');
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonData);
+  } catch {
+    throw new Error('Backup file is not valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || !parsed.data || typeof parsed.data !== 'object') {
     throw new Error('Invalid backup file format.');
   }
 
-  const { cards, people, bills, transactions } = parsed.data;
+  const clean = sanitizeBackup(parsed.data);
 
-  if (Array.isArray(cards)) setLocal(CARDS_STORAGE_KEY, cards);
-  if (Array.isArray(people)) setLocal(PEOPLE_STORAGE_KEY, people);
-  if (Array.isArray(bills)) setLocal(BILLS_STORAGE_KEY, bills);
-  if (Array.isArray(transactions)) setLocal(TRANSACTIONS_STORAGE_KEY, transactions);
+  if (Array.isArray(parsed.data.cards)) setLocal(CARDS_STORAGE_KEY, clean.cards);
+  if (Array.isArray(parsed.data.people)) setLocal(PEOPLE_STORAGE_KEY, clean.people);
+  if (Array.isArray(parsed.data.bills)) setLocal(BILLS_STORAGE_KEY, clean.bills);
+  if (Array.isArray(parsed.data.transactions)) setLocal(TRANSACTIONS_STORAGE_KEY, clean.transactions);
 
   // Sync to Supabase if connected
   await syncAllLocalDataToSupabase();

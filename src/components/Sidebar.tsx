@@ -1,5 +1,5 @@
 import React from 'react';
-import { CreditCard, Users, FileSpreadsheet, Share2, LayoutDashboard, Settings } from 'lucide-react';
+import { CreditCard, Users, FileSpreadsheet, Share2, LayoutDashboard, Settings, X } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -8,6 +8,8 @@ interface SidebarProps {
   cardsCount: number;
   peopleCount: number;
   transactionsCount: number;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -16,6 +18,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   cardsCount,
   peopleCount,
   transactionsCount,
+  isOpen = false,
+  onClose,
 }) => {
   const navItems = [
     {
@@ -57,7 +61,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-64 shrink-0 bg-white border-r border-slate-200/80 flex flex-col min-h-screen select-none">
+    <>
+    {/* Mobile backdrop */}
+    {isOpen && (
+      <div
+        className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden print:hidden"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+    )}
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 w-64 max-w-[85vw] transform transition-transform duration-200 lg:static lg:z-auto lg:max-w-none lg:translate-x-0 shrink-0 bg-white border-r border-slate-200/80 flex flex-col min-h-dvh lg:min-h-screen select-none overflow-y-auto ${
+        isOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}
+      aria-label="Main navigation"
+    >
       {/* Brand Header */}
       <div className="h-16 px-6 border-b border-slate-200/80 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
@@ -69,6 +87,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="text-[12px] text-slate-500 font-normal">Personal Bill Sorter</div>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="lg:hidden p-1.5 -mr-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+          aria-label="Close menu"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation Links - 14px, Medium as requested */}
@@ -79,7 +105,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           return (
             <button
               key={item.id}
-              onClick={() => onTabChange(item.id)}
+              onClick={() => {
+                onTabChange(item.id);
+                onClose?.();
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-[14px] font-medium transition-colors duration-150 ${
                 isActive
                   ? 'bg-slate-100 text-slate-900 font-medium'
@@ -108,5 +137,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
     </aside>
+    </>
   );
 };

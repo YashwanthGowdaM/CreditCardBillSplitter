@@ -36,6 +36,7 @@ export default function App() {
   const [uploadedBills, setUploadedBills] = useState<UploadedBill[]>([]);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Instructions Modal state (Auto-shows on every new session)
   const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
@@ -200,11 +201,13 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
+    <div className="flex min-h-dvh w-full overflow-x-hidden bg-slate-50 text-slate-900 font-sans antialiased">
       {/* Left Sidebar */}
       <Sidebar
         activeTab={activeTab}
         onTabChange={setActiveTab}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
         cardsCount={cards.length}
         peopleCount={people.length}
         transactionsCount={transactions.length}
@@ -222,9 +225,10 @@ export default function App() {
             await loadAllData();
           }}
           onOpenInstructions={() => setIsInstructionsOpen(true)}
+          onOpenMenu={() => setIsSidebarOpen(true)}
         />
 
-        <main className="flex-1 pb-12">
+        <main className="flex-1 min-w-0 pb-12">
           {isLoading ? (
             <div className="p-12 text-center text-[13px] font-normal text-slate-500">
               <div className="w-5 h-5 border-2 border-slate-300 border-t-slate-800 rounded-full animate-spin mx-auto mb-3" />

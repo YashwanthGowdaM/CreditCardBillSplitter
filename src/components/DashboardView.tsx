@@ -33,10 +33,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const unassignedCount = transactions.length - assignedTransactions.length;
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-8">
       {/* Dashboard title: 32px, Bold */}
       <div>
-        <h1 className="text-[32px] font-bold text-slate-900 tracking-tight leading-tight">
+        <h1 className="text-2xl sm:text-[32px] font-bold text-slate-900 tracking-tight leading-tight">
           Credit Card Bill Sorting & Expense Sharing
         </h1>
         {/* Body text: 14px, Regular */}
@@ -115,7 +115,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 cols: People Split Breakdown */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200/80 overflow-hidden shadow-xs">
-          <div className="p-5 border-b border-slate-200/80 flex items-center justify-between">
+          <div className="p-4 sm:p-5 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
             <div>
               {/* Card titles: 16px, Semibold */}
               <h3 className="text-[16px] font-semibold text-slate-900 tracking-tight">
@@ -149,7 +149,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 return (
                   <div
                     key={person.id}
-                    className="p-4 flex items-center justify-between hover:bg-slate-50/60 transition-colors"
+                    className="p-4 flex flex-wrap items-center justify-between gap-3 hover:bg-slate-50/60 transition-colors"
                   >
                     <div>
                       {/* Body text: 14px, Medium for person name */}
@@ -203,9 +203,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {cards.slice(0, 4).map((card) => (
               <div
                 key={card.id}
-                className="p-3 rounded-lg border border-slate-200/60 bg-slate-50/50 flex items-center justify-between"
+                className="p-3 rounded-lg border border-slate-200/60 bg-slate-50/50 flex items-center justify-between gap-3"
               >
-                <div>
+                <div className="min-w-0">
                   <div className="text-[14px] font-medium text-slate-800">
                     {card.issuer} {card.card_name}
                   </div>

@@ -15,24 +15,13 @@
  * All wording lives in LEXICON below — supporting a new bank means adding words, not code.
  */
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { generateId } from './storage';
 import { Transaction } from '../types';
 
-if (typeof window !== 'undefined') {
-  try {
-    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
-        import.meta.url
-      ).toString();
-    }
-  } catch (e) {
-    try {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-    } catch {
-      console.warn('PDF worker configuration notice:', e);
-    }
-  }
+if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+  // Worker is bundled with the app (no third-party CDN script execution).
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 }
 
 /* ------------------------------------------------------------------ */

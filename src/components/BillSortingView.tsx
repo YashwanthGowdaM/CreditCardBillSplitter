@@ -119,6 +119,11 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       return;
     }
 
+    if (file.size > 25 * 1024 * 1024) {
+      setUploadError({ cardId, message: 'PDF is too large (max 25 MB).' });
+      return;
+    }
+
     setUploadError(null);
     setPasswordErrors((prev) => {
       const copy = { ...prev };
@@ -402,7 +407,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-8">
       {/* Save Notification Banner */}
       {saveStatus && (
         <div className="p-3 bg-emerald-50 border border-emerald-200/80 rounded-lg flex items-center justify-between text-emerald-800 text-[13px] shadow-xs">
@@ -415,8 +420,8 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       )}
 
       {/* SECTION 1: Credit Card Statement Upload Rows */}
-      <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="bg-white rounded-xl border border-slate-200/80 p-4 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-[20px] font-semibold text-slate-900 tracking-tight">
               Upload Credit Card Statements
@@ -425,7 +430,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
               Select monthly PDF statements for each card. Only debit / DR transactions will be extracted.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <a
               href={SAMPLE_BILLS_DRIVE_URL}
               target="_blank"
@@ -470,7 +475,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     {/* Card Title & Info */}
-                    <div className="flex items-center gap-3 min-w-[200px]">
+                    <div className="flex items-center gap-3 sm:min-w-[200px]">
                       <div className="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-semibold text-[13px] text-slate-700">
                         {card.issuer.substring(0, 2)}
                       </div>
@@ -485,8 +490,8 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
                     </div>
 
                     {/* PDF Upload Controls */}
-                    <div className="flex flex-1 sm:justify-end items-center gap-3">
-                      <label className="flex items-center gap-2 px-3.5 py-2 border border-slate-200 hover:border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 cursor-pointer bg-white transition-colors max-w-xs truncate shadow-2xs">
+                    <div className="flex flex-1 flex-wrap sm:flex-nowrap sm:justify-end items-center gap-3 min-w-0">
+                      <label className="flex items-center gap-2 px-3.5 py-2 border border-slate-200 hover:border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 cursor-pointer bg-white transition-colors max-w-full sm:max-w-xs min-w-0 truncate shadow-2xs">
                         <FileUp className="w-4 h-4 text-slate-400 shrink-0" />
                         <span className="truncate">
                           {file ? file.name : 'Choose PDF'}
@@ -616,7 +621,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
 
           {/* Filters Bar */}
           <div className="flex flex-wrap items-center gap-3 pt-2 text-[13px]">
-            <div className="relative flex-1 min-w-[180px]">
+            <div className="relative flex-1 min-w-full sm:min-w-[180px]">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
                 type="text"
@@ -681,7 +686,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full min-w-[640px] text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/70 border-b border-slate-200/80 text-slate-600 font-semibold text-[13px] select-none">
                   <th className="py-3.5 px-4 w-12 text-center font-semibold">Sl No</th>
@@ -785,16 +790,16 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       {/* MODAL 1: Extracted Transactions Review Modal */}
       {reviewModalData && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-3xl w-full shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-3xl w-full shadow-2xl flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="border-b border-slate-100 pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-[16px] font-semibold text-slate-900">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-[16px] font-semibold text-slate-900 break-words">
                     Review Extracted Debits: {reviewModalData.card.issuer} {reviewModalData.card.card_name}
                   </h3>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[12px] font-normal text-slate-500">
+                  <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                    <span className="text-[12px] font-normal text-slate-500 break-all">
                       File: <span className="font-medium text-slate-700">{reviewModalData.file.name}</span>
                     </span>
                     <span className="text-slate-300">•</span>
@@ -825,7 +830,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
 
             {/* Modal Body / Items List */}
             <div className="py-3 overflow-y-auto flex-1 space-y-2">
-              <div className="text-[13px] font-medium text-slate-600 mb-2 flex items-center justify-between">
+              <div className="text-[13px] font-medium text-slate-600 mb-2 flex flex-wrap items-center justify-between gap-2">
                 <span>
                   Transactions ({reviewModalData.items.filter((i) => i.selected).length} of {reviewModalData.items.length} selected):
                 </span>
@@ -1070,7 +1075,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       {/* MODAL 2: Paste Statement Text fallback */}
       {pasteMode && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-lg w-full shadow-2xl space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-[16px] font-semibold text-slate-900">Paste Statement Text</h3>
               <button
@@ -1112,7 +1117,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       {/* MODAL 3: Manual Add Row Modal */}
       {isAddManualModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md w-full shadow-xl">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-[16px] font-semibold text-slate-900">Add Manual Transaction</h3>
               <button
@@ -1142,7 +1147,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
                     Date *
@@ -1227,7 +1232,7 @@ export const BillSortingView: React.FC<BillSortingViewProps> = ({
       {/* MODAL 4: Clear All Transactions Confirmation Modal */}
       {isClearAllModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md w-full shadow-xl">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-xl">
             <h3 className="text-[16px] font-semibold text-slate-900">Clear All Transactions</h3>
             <p className="text-[13px] font-normal text-slate-500 mt-2 leading-relaxed">
               Are you sure you want to remove all {transactions.length} sorted debit transactions from the combined table? This action will reset all table assignments.

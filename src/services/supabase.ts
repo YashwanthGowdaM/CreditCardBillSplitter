@@ -19,7 +19,20 @@ export function getSavedSupabaseConfig() {
   };
 }
 
+export function isSafeSupabaseUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+    return u.protocol === 'https:' || (local && u.protocol === 'http:');
+  } catch {
+    return false;
+  }
+}
+
 export function saveSupabaseConfig(url: string, anonKey: string, storageBucket = 'credit-card-bills') {
+  if (!isSafeSupabaseUrl(url.trim())) {
+    throw new Error('Supabase URL must be a valid https:// URL.');
+  }
   localStorage.setItem(SUPABASE_URL_KEY, url.trim());
   localStorage.setItem(SUPABASE_KEY_KEY, anonKey.trim());
   localStorage.setItem(SUPABASE_BUCKET_KEY, storageBucket.trim());
@@ -30,7 +43,7 @@ let currentClientKey = '';
 
 export function getSupabaseClient(): SupabaseClient | null {
   const { url, anonKey } = getSavedSupabaseConfig();
-  if (!url || !anonKey) {
+  if (!url || !anonKey || !isSafeSupabaseUrl(url)) {
     return null;
   }
 
@@ -145,7 +158,12 @@ ALTER TABLE public.uploaded_bills ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transaction_assignments ENABLE ROW LEVEL SECURITY;
 
--- Public / Authenticated policies for personal management
+-- WARNING: the policies below let ANYONE holding your anon key read/write/delete
+-- all rows (the anon key is public in the browser). Fine for a throwaway demo;
+-- for real data enable Supabase Auth and replace them, e.g.:
+--   CREATE POLICY "owner only" ON public.cards FOR ALL TO authenticated
+--     USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+-- (add a user_id uuid column default auth.uid() to each table first)
 CREATE POLICY "Allow public full access to cards" ON public.cards FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public full access to people" ON public.people FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public full access to uploaded_bills" ON public.uploaded_bills FOR ALL USING (true) WITH CHECK (true);

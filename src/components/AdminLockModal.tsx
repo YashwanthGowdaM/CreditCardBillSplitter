@@ -20,23 +20,35 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isChecking, setIsChecking] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password) {
       setErrorMsg('Please enter the admin password.');
       return;
     }
+    if (isChecking) return;
 
-    if (verifyAdminPassword(password)) {
-      setErrorMsg('');
-      setPassword('');
-      onSuccess();
-      onClose();
-    } else {
-      setErrorMsg('Incorrect password. To reset, update VITE_ADMIN_PASSWORD in .env');
+    setIsChecking(true);
+    try {
+      const result = await verifyAdminPassword(password);
+      if (result.ok) {
+        setErrorMsg('');
+        setPassword('');
+        onSuccess();
+        onClose();
+      } else if (result.reason === 'not_configured') {
+        setErrorMsg('Admin password is not configured. Set VITE_ADMIN_PASSWORD_HASH in your .env file.');
+      } else if (result.reason === 'locked') {
+        setErrorMsg(`Too many failed attempts. Try again in ${result.retryAfterSec ?? 60} seconds.`);
+      } else {
+        setErrorMsg(`Incorrect password. ${result.attemptsLeft ?? 0} attempt(s) left before a temporary lockout.`);
+      }
+    } finally {
+      setIsChecking(false);
     }
   };
 
@@ -47,8 +59,8 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl border border-slate-200/90 p-6 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
+      <div className="bg-white rounded-xl border border-slate-200/90 p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -63,6 +75,8 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
+            aria-label="Close"
             onClick={handleClose}
             className="p-1 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
           >
@@ -87,7 +101,7 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
           <div>
             <label className="block text-[13px] font-medium text-slate-700 mb-1.5 flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-slate-400" />
-              <span>Enter Admin Password (Yash@123)</span>
+              <span>Enter Admin Password</span>
             </label>
             <div className="relative">
               <input
@@ -99,6 +113,8 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
                 }}
                 placeholder="Enter password..."
                 autoFocus
+                autoComplete="current-password"
+                maxLength={128}
                 className="w-full pl-3 pr-10 py-2.5 text-[14px] font-normal border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
               />
               <button
@@ -117,7 +133,7 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
               <span>Password Security</span>
             </div>
             <p className="leading-snug">
-              Master password is stored in <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code> under <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">VITE_ADMIN_PASSWORD</code>. To change or reset, edit <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code>.
+              Master password hash is stored in <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code> under <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px] break-all">VITE_ADMIN_PASSWORD_HASH</code>. To change or reset, edit <code className="bg-slate-200/80 px-1 py-0.5 rounded text-slate-800 font-mono text-[10px]">.env</code>.
             </p>
           </div>
 
@@ -132,7 +148,8 @@ export const AdminLockModal: React.FC<AdminLockModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+              disabled={isChecking}
+              className="disabled:opacity-60 flex items-center gap-2 px-4 py-2 text-[14px] font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
             >
               <Lock className="w-3.5 h-3.5" />
               <span>Verify & Unlock</span>

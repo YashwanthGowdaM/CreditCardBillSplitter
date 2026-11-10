@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, CheckCircle2, RefreshCw, Check, Lock, Unlock, FolderDown, ExternalLink } from 'lucide-react';
+import { Database, CheckCircle2, RefreshCw, Check, Lock, Unlock, FolderDown, ExternalLink, Menu } from 'lucide-react';
 import { ActiveTab } from '../types';
 import { SAMPLE_BILLS_DRIVE_URL } from './InstructionsModal';
 
@@ -10,6 +10,7 @@ interface HeaderProps {
   onToggleLock: () => void;
   onSyncDatabase?: () => Promise<void>;
   onOpenInstructions?: () => void;
+  onOpenMenu?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({
   isUnlocked,
   onToggleLock,
   onSyncDatabase,
+  onOpenMenu,
 }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [justSynced, setJustSynced] = useState(false);
@@ -56,16 +58,24 @@ export const Header: React.FC<HeaderProps> = ({
   const details = getTabDetails(activeTab);
 
   return (
-    <header className="h-16 px-8 border-b border-slate-200/80 bg-white flex items-center justify-between sticky top-0 z-10 print:hidden">
+    <header className="min-h-16 px-3 sm:px-6 lg:px-8 py-2 border-b border-slate-200/80 bg-white flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sticky top-0 z-20 print:hidden">
       {/* Left: Breadcrumbs & Section Title */}
-      <div className="flex items-center gap-2.5">
-        <span className="text-[13px] font-medium text-slate-500">{details.breadcrumb}</span>
-        <span className="text-slate-300">/</span>
-        <h1 className="text-[15px] font-semibold text-slate-900 tracking-tight">{details.title}</h1>
+      <div className="flex items-center gap-2.5 min-w-0">
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          className="lg:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg shrink-0"
+          aria-label="Open menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <span className="hidden sm:inline text-[13px] font-medium text-slate-500">{details.breadcrumb}</span>
+        <span className="hidden sm:inline text-slate-300">/</span>
+        <h1 className="text-[14px] sm:text-[15px] font-semibold text-slate-900 tracking-tight truncate">{details.title}</h1>
       </div>
 
       {/* Right: Practice Drive link, Lock status, Storage connection status & Sync button */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {/* Practice Bills Google Drive Link */}
         <a
           href={SAMPLE_BILLS_DRIVE_URL}
@@ -75,8 +85,8 @@ export const Header: React.FC<HeaderProps> = ({
           title="Download sample fake credit card bills from Google Drive for practice"
         >
           <FolderDown className="w-3.5 h-3.5 text-amber-700" />
-          <span>Practice Bills</span>
-          <ExternalLink className="w-3 h-3 text-amber-600" />
+          <span className="hidden md:inline">Practice Bills</span>
+          <ExternalLink className="hidden md:block w-3 h-3 text-amber-600" />
         </a>
 
         {/* Admin Lock Status Pill */}
@@ -96,12 +106,12 @@ export const Header: React.FC<HeaderProps> = ({
           {isUnlocked ? (
             <>
               <Unlock className="w-3.5 h-3.5 text-amber-600" />
-              <span>Admin Unlocked</span>
+              <span className="hidden sm:inline">Admin Unlocked</span>
             </>
           ) : (
             <>
               <Lock className="w-3.5 h-3.5 text-slate-500" />
-              <span>Protected Mode</span>
+              <span className="hidden sm:inline">Protected Mode</span>
             </>
           )}
         </button>
@@ -125,7 +135,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
             )}
-            <span>{isSyncing ? 'Syncing...' : justSynced ? 'Database Synced!' : 'Sync Data'}</span>
+            <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : justSynced ? 'Database Synced!' : 'Sync Data'}</span>
           </button>
         )}
 
@@ -134,12 +144,12 @@ export const Header: React.FC<HeaderProps> = ({
           {isSupabaseConnected ? (
             <>
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Supabase Connected</span>
+              <span className="hidden sm:inline">Supabase Connected</span>
             </>
           ) : (
             <>
               <Database className="w-3.5 h-3.5 text-slate-400" />
-              <span>Local Storage Active</span>
+              <span className="hidden sm:inline">Local Storage Active</span>
             </>
           )}
         </div>

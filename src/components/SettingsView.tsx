@@ -96,6 +96,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 10 * 1024 * 1024 || !file.name.toLowerCase().endsWith('.json')) {
+      alert('Please choose a .json backup file smaller than 10 MB.');
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
@@ -114,7 +120,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-8">
       {/* Header */}
       <div>
         <h2 className="text-[20px] font-semibold text-slate-900 tracking-tight">Application Settings</h2>
@@ -252,7 +258,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {/* Copy SQL Schema section */}
         <div className="pt-4 border-t border-slate-100 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h4 className="text-[14px] font-semibold text-slate-900">Database Schema Script</h4>
               <p className="text-[12px] font-normal text-slate-500 mt-0.5">

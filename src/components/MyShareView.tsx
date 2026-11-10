@@ -73,9 +73,9 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
   };
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-8">
       {/* Top Section: Header & Person Selector */}
-      <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-white rounded-xl border border-slate-200/80 p-4 sm:p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           {/* Section titles: 20px, Semibold */}
           <h2 className="text-[20px] font-semibold text-slate-900 tracking-tight">
@@ -88,7 +88,7 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
         </div>
 
         {/* Dropdown to select person */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           {/* Labels: 13px, Medium */}
           <label htmlFor="person-select" className="text-[13px] font-medium text-slate-700 whitespace-nowrap">
             Select Person:
@@ -97,7 +97,7 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
             id="person-select"
             value={selectedPersonId}
             onChange={(e) => setSelectedPersonId(e.target.value)}
-            className="px-3.5 py-2 border border-slate-200 rounded-lg text-[13px] font-medium text-slate-900 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900 min-w-[200px]"
+            className="px-3.5 py-2 border border-slate-200 rounded-lg text-[13px] font-medium text-slate-900 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900 w-full sm:w-auto sm:min-w-[200px]"
           >
             {people.length === 0 && <option value="">No people registered</option>}
             {people.map((p) => (
@@ -201,7 +201,7 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className="w-full min-w-[640px] text-left border-collapse">
                 <thead>
                   {/* Table headers: 13px, Semibold */}
                   <tr className="bg-slate-50/70 border-b border-slate-200/80 text-slate-600 font-semibold text-[13px]">
@@ -261,7 +261,7 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
                 className="bg-white rounded-xl border border-slate-200/80 overflow-hidden shadow-xs"
               >
                 {/* Card Subheader */}
-                <div className="p-4 border-b border-slate-200/80 bg-slate-50/60 flex items-center justify-between">
+                <div className="p-4 border-b border-slate-200/80 bg-slate-50/60 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-medium text-slate-500">Card:</span>
                     <span className="text-[14px] font-semibold text-slate-900">{cardSummary.cardName}</span>
@@ -272,7 +272,7 @@ export const MyShareView: React.FC<MyShareViewProps> = ({
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
+                  <table className="w-full min-w-[640px] text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50/40 border-b border-slate-100 text-slate-500 font-semibold text-[13px]">
                         <th className="py-3 px-4 w-14 text-center font-semibold">Sl No</th>

@@ -109,9 +109,9 @@ export const PeopleView: React.FC<PeopleViewProps> = ({
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       {/* Top Banner & Action */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-[20px] font-semibold text-slate-900 tracking-tight">People</h2>
           <p className="text-[12px] font-normal text-slate-500 mt-1">
@@ -146,7 +146,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full min-w-[640px] text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/70 border-b border-slate-200/80 text-slate-600 font-semibold text-[13px]">
                   <th className="py-3.5 px-4 font-semibold">Name</th>
@@ -222,7 +222,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({
       {/* Delete Confirmation Modal */}
       {deleteConfirmId && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md w-full shadow-lg">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-lg">
             <h3 className="text-[16px] font-semibold text-slate-900">Delete Person</h3>
             <p className="text-[13px] font-normal text-slate-500 mt-2 leading-relaxed">
               Are you sure you want to remove this person? Any transactions currently assigned to them will become unassigned.
@@ -248,7 +248,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({
       {/* Add / Edit Person Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md w-full shadow-xl">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <h3 className="text-[16px] font-semibold text-slate-900">
                 {editingPerson ? 'Edit Person' : 'Add New Person'}
